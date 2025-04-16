@@ -6,8 +6,8 @@ import onnxruntime as ort
 MODEL_PATH = "/home/sunrise/Documents/HelloBalls-Host/scripts/yolov11_roboflow_ir9.onnx" # Ensure this path is correct
 INPUT_WIDTH = 640
 INPUT_HEIGHT = 640
-CONFIDENCE_THRESHOLD = 0.5
-NMS_THRESHOLD = 0.4
+CONFIDENCE_THRESHOLD = 0.2
+NMS_THRESHOLD = 0.2
 CLASS_NAMES = ["Tennis Ball", "Tennis ball", "Tennis racket", "Tennis-Ball", "person", "tennis-ball"]  # Update this if the model has more classes
 
 def preprocess_image(image):
@@ -20,49 +20,63 @@ def preprocess_image(image):
 def postprocess(outputs, image_shape):
     """
     Postprocess the outputs to extract bounding boxes and coordinates.
+    YOLOv8/v11 uses a transposed output format (batch, features, detections)
     """
     boxes = []
     confidences = []
     class_ids = []
-
-    for output in outputs:
-        for detection in output:
-            # Ensure the detection has enough elements
-            if len(detection) <= 5:
-                print("Warning: Detection output is too short. Skipping...")
-                continue
-
-            # Extract box coordinates and class scores
-            box = detection[0:4]
-            scores = detection[5:]
-            class_id = np.argmax(scores)
-            confidence = scores[class_id]
-
-            # Ensure class_id is valid
-            if class_id >= len(CLASS_NAMES):
-                print(f"Warning: Detected invalid class_id {class_id}. Skipping...")
-                continue
-
-            print(f"Detected class_id: {class_id}, Confidence: {confidence}")
-
-            if confidence > CONFIDENCE_THRESHOLD:
-                # Scale box coordinates to the image size
-                box = box * np.array([image_shape[1], image_shape[0], image_shape[1], image_shape[0]])
-                (center_x, center_y, width, height) = box.astype("int")
-                x = int(center_x - (width / 2))
-                y = int(center_y - (height / 2))
-                boxes.append([x, y, int(width), int(height)])
-                confidences.append(float(confidence))
-                class_ids.append(class_id)
-
+    
+    # Get original image dimensions for scaling
+    img_height, img_width = image_shape[:2]
+    
+    # Transpose the output to the format we can process
+    # From (1, 10, 8400) to (1, 8400, 10)
+    outputs = outputs.transpose((0, 2, 1))
+    
+    for i in range(outputs.shape[1]):
+        detection = outputs[0, i, :]
+        
+        # First 4 values are box coordinates, remaining are class scores
+        box = detection[0:4]
+        scores = detection[4:]  # All values after the box coordinates are class scores
+        
+        class_id = np.argmax(scores)
+        confidence = scores[class_id]
+        
+        # Ensure class_id is valid
+        if class_id >= len(CLASS_NAMES):
+            continue
+        
+        if confidence > CONFIDENCE_THRESHOLD:
+            # Convert box coordinates to pixel values
+            # YOLOv8/v11 outputs center_x, center_y, width, height directly in normalized form
+            center_x, center_y, width, height = box
+            
+            # Scale normalized coordinates (0-1) to image dimensions
+            center_x *= img_width
+            center_y *= img_height
+            width *= img_width
+            height *= img_height
+            
+            # Calculate top-left corner from center coordinates
+            x = int(center_x - width/2)
+            y = int(center_y - height/2)
+            
+            boxes.append([x, y, int(width), int(height)])
+            confidences.append(float(confidence))
+            class_ids.append(class_id)
+    
     # Apply Non-Maximum Suppression (NMS)
-    indices = cv2.dnn.NMSBoxes(boxes, confidences, CONFIDENCE_THRESHOLD, NMS_THRESHOLD)
-    final_boxes = []
-    for i in indices:
-        i = i[0]
-        final_boxes.append(boxes[i])
-
-    return final_boxes
+    if boxes:
+        indices = cv2.dnn.NMSBoxes(boxes, confidences, CONFIDENCE_THRESHOLD, NMS_THRESHOLD)
+        final_boxes = []
+        for i in indices:
+            if isinstance(i, list) or isinstance(i, np.ndarray):
+                i = i[0]  # For older OpenCV versions
+            final_boxes.append(boxes[i])
+        return final_boxes
+    
+    return []
 
 def process_image(image):
     """
@@ -76,14 +90,14 @@ def process_image(image):
     input_name = session.get_inputs()[0].name
     outputs = session.run(None, {input_name: blob})
 
-    print(f"Outputs shape: {outputs[0].shape}")
-    print(f"Sample output: {outputs[0][0]}")
+    # print(f"Outputs shape: {outputs[0].shape}")
+    # print(f"Sample output: {outputs[0][0]}")
 
     # Postprocess the outputs
     coordinates = postprocess(outputs[0], image.shape)
     return coordinates
 
-def main():
+def cv_test_onnx():
     try:
         # Open the camera (0 is usually the default camera)
         cap = cv2.VideoCapture(0)
@@ -124,4 +138,4 @@ def main():
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    cv_test_onnx()
