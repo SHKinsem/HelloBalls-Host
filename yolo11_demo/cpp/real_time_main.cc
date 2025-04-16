@@ -22,6 +22,7 @@ limitations under the License.
 // D-Robotics *.bin 模型路径
 // Path of D-Robotics *.bin model.
 #define MODEL_PATH "../../ptq_models/yolo11n_detect_bayese_640x640_nv12_int16softmax_modified.bin"
+// #define MODEL_PATH "yolo11_demo/ptq_models/yolo11n_detect_bayese_640x640_nv12_int16softmax_modified.bin"
 
 // 摄像头设备ID，默认为0
 // Camera device ID, default is 0
@@ -39,11 +40,12 @@ limitations under the License.
 
 // NMS的阈值, 默认0.45
 // Non-Maximum Suppression (NMS) threshold, default is 0.45
-#define NMS_THRESHOLD 0.7
+#define NMS_THRESHOLD 0.45
 
 // 分数阈值, 默认0.25
 // Score threshold, default is 0.25
-#define SCORE_THRESHOLD 0.25
+#define SCORE_THRESHOLD 0.25  // Default threshold for most classes
+#define SPORTS_BALL_THRESHOLD 0.1  // Higher threshold for sports balls (class 32)
 
 // NMS选取的前K个框数, 默认300
 // Number of top-K boxes selected by NMS, default is 300
@@ -105,6 +107,12 @@ limitations under the License.
 // COCO Names
 std::vector<std::string> object_names = {
     "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"};
+
+// Helper function to check if class ID is a sports ball or person
+bool isTargetClass(int cls_id) {
+    return cls_id == 0 || // person
+           cls_id == 32;  // sports ball
+}
 
 // 用于存储和计算帧率的类
 class FPSCalculator {
@@ -619,11 +627,13 @@ int main()
         // NMS
         std::vector<std::vector<int>> indices(CLASSES_NUM);
         for (int i = 0; i < CLASSES_NUM; i++) {
-            cv::dnn::NMSBoxes(bboxes[i], scores[i], SCORE_THRESHOLD, NMS_THRESHOLD, indices[i], 1.f, NMS_TOP_K);
+            float threshold = (i == 32) ? SPORTS_BALL_THRESHOLD : SCORE_THRESHOLD;
+            cv::dnn::NMSBoxes(bboxes[i], scores[i], threshold, NMS_THRESHOLD, indices[i], 1.f, NMS_TOP_K);
         }
 
-        // 在原始图像上渲染结果
+        // 用于绘制结果的循环
         for (int cls_id = 0; cls_id < CLASSES_NUM; cls_id++) {
+            if (!isTargetClass(cls_id)) continue; // Only process target classes (person & sports ball)
             for (std::vector<int>::iterator it = indices[cls_id].begin(); it != indices[cls_id].end(); ++it) {
                 float x1 = (bboxes[cls_id][*it].x - x_shift) / x_scale;
                 float y1 = (bboxes[cls_id][*it].y - y_shift) / y_scale;
@@ -633,11 +643,12 @@ int main()
                 std::string name = object_names[cls_id % CLASSES_NUM];
 
                 // 绘制矩形
-                cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), cv::Scalar(255, 0, 0), LINE_SIZE);
+                cv::Scalar color = (cls_id == 0) ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255); // Green for person, Red for sports ball
+                cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), color, LINE_SIZE);
 
                 // 绘制字体
                 std::string text = name + ": " + std::to_string(static_cast<int>(score * 100)) + "%";
-                cv::putText(frame, text, cv::Point(x1, y1 - 5), cv::FONT_HERSHEY_SIMPLEX, FONT_SIZE, cv::Scalar(0, 0, 255), FONT_THICKNESS, cv::LINE_AA);
+                cv::putText(frame, text, cv::Point(x1, y1 - 5), cv::FONT_HERSHEY_SIMPLEX, FONT_SIZE, color, FONT_THICKNESS, cv::LINE_AA);
             }
         }
 
