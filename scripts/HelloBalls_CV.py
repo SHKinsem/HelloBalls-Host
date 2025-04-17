@@ -163,7 +163,7 @@ def process_image(image):
 def cv_test_onnx():
     try:
         # Open the camera (0 is usually the default camera)
-        cap = cv2.VideoCapture(1)
+        cap = cv2.VideoCapture(0)
 
         if not cap.isOpened():
             print("Error: Unable to access the camera.")
@@ -244,7 +244,7 @@ def test_on_static_image(image_path=None):
 
 if __name__ == "__main__":
     # Test on a static image first
-    test_on_static_image()
+    # test_on_static_image()
     
     # Then use webcam for detection
     cv_test_onnx()

@@ -21,8 +21,10 @@ limitations under the License.
 
 // D-Robotics *.bin 模型路径
 // Path of D-Robotics *.bin model.
-#define MODEL_PATH "../../ptq_models/yolo11n_detect_bayese_640x640_nv12_int16softmax_modified.bin"
+// #define MODEL_PATH "../../ptq_models/yolo11n_detect_bayese_640x640_nv12_int16softmax_modified.bin"
+// #define MODEL_PATH "../../ptq_models/yolo11n_detect_bayese_640x640_nv12_fp32softmax_modified.bin"
 // #define MODEL_PATH "yolo11_demo/ptq_models/yolo11n_detect_bayese_640x640_nv12_int16softmax_modified.bin"
+#define MODEL_PATH "../../ptq_models/yolo11s_detect_bayese_640x640_nv12_modified.bin"
 
 // 摄像头设备ID，默认为0
 // Camera device ID, default is 0
@@ -44,7 +46,7 @@ limitations under the License.
 
 // 分数阈值, 默认0.25
 // Score threshold, default is 0.25
-#define SCORE_THRESHOLD 0.25  // Default threshold for most classes
+#define SCORE_THRESHOLD 0.1  // Default threshold for most classes
 #define SPORTS_BALL_THRESHOLD 0.1  // Higher threshold for sports balls (class 32)
 
 // NMS选取的前K个框数, 默认300
@@ -319,7 +321,7 @@ int main()
     
     // 设置摄像头分辨率（如果支持）
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 712);
     
     std::cout << "Camera opened successfully." << std::endl;
     std::cout << "Press 'q' to quit." << std::endl;
