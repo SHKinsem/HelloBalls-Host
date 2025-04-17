@@ -24,7 +24,8 @@ limitations under the License.
 // #define MODEL_PATH "../../ptq_models/yolo11n_detect_bayese_640x640_nv12_int16softmax_modified.bin"
 // #define MODEL_PATH "../../ptq_models/yolo11n_detect_bayese_640x640_nv12_fp32softmax_modified.bin"
 // #define MODEL_PATH "yolo11_demo/ptq_models/yolo11n_detect_bayese_640x640_nv12_int16softmax_modified.bin"
-#define MODEL_PATH "../../ptq_models/yolo11s_detect_bayese_640x640_nv12_modified.bin"
+// #define MODEL_PATH "../../ptq_models/yolo11s_detect_bayese_640x640_nv12_modified.bin"
+#define MODEL_PATH "../../ptq_models/yolo11m_detect_bayese_640x640_nv12_modified.bin"
 
 // 摄像头设备ID，默认为0
 // Camera device ID, default is 0
@@ -147,6 +148,20 @@ public:
         return fps;
     }
 };
+
+// Add a function to toggle resolution
+void toggleResolution(cv::VideoCapture &cap, bool &is720p) {
+    if (is720p) {
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 712);
+        std::cout << "Resolution changed to 1280x712" << std::endl;
+    } else {
+        cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
+        cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+        std::cout << "Resolution changed to 1280x720" << std::endl;
+    }
+    is720p = !is720p;
+}
 
 int main()
 {
@@ -321,10 +336,14 @@ int main()
     
     // 设置摄像头分辨率（如果支持）
     cap.set(cv::CAP_PROP_FRAME_WIDTH, 1280);
-    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 712);
-    
+    cap.set(cv::CAP_PROP_FRAME_HEIGHT, 720);
+    // cap.set(cv::CAP_PROP_FPS, 30);
+
     std::cout << "Camera opened successfully." << std::endl;
     std::cout << "Press 'q' to quit." << std::endl;
+
+    // Add a flag to track resolution state
+    bool is720p = true;
 
     // 4. 准备模型输出数据的空间
     hbDNNTensor *output = new hbDNNTensor[output_count];
@@ -666,9 +685,12 @@ int main()
         hbDNNReleaseTask(task_handle);
 
         // 检查是否按下'q'键退出
-        if (cv::waitKey(1) == 'q') {
+        int key = cv::waitKey(1);
+        if (key == 'q') {
             std::cout << "Exiting..." << std::endl;
             break;
+        } else if (key == 'r') {
+            toggleResolution(cap, is720p);
         }
     }
 
