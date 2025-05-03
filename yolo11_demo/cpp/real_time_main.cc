@@ -47,8 +47,8 @@ limitations under the License.
 
 // 分数阈值, 默认0.25
 // Score threshold, default is 0.25
-#define SCORE_THRESHOLD 0.1  // Default threshold for most classes
-#define SPORTS_BALL_THRESHOLD 0.1  // Higher threshold for sports balls (class 32)
+#define SCORE_THRESHOLD 0.3  // Default threshold for most classes
+#define SPORTS_BALL_THRESHOLD 0.3  // Higher threshold for sports balls (class 32)
 
 // NMS选取的前K个框数, 默认300
 // Number of top-K boxes selected by NMS, default is 300
@@ -644,7 +644,7 @@ int main()
                 l_bbox_raw += REG * 4;
             }
         }
-
+    
         // NMS
         std::vector<std::vector<int>> indices(CLASSES_NUM);
         for (int i = 0; i < CLASSES_NUM; i++) {
