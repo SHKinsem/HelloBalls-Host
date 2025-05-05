@@ -1,0 +1,42 @@
+# File: /ball-detector-py/ball-detector-py/python/ball_detector.py
+
+import cv2
+import numpy as np
+import pybind11
+
+# Load the C++ model and initialize the detector
+class BallDetector:
+    def __init__(self, model_path):
+        self.model = self.load_model(model_path)
+
+    def load_model(self, model_path):
+        # Call the C++ function to load the model
+        # Assuming the C++ function is exposed as `loadModel`
+        return pybind11.loadModel(model_path)
+
+    def detect_balls(self, frame):
+        # Preprocess the frame
+        img_nv12 = self.preprocess_frame(frame)
+
+        # Call the C++ function to perform detection
+        bboxes, scores, indices = self.model.detect(img_nv12)
+
+        # Post-process the results
+        return self.postprocess_results(bboxes, scores, indices)
+
+    def preprocess_frame(self, frame):
+        # Convert frame to NV12 format or any required format
+        # This is a placeholder for actual preprocessing logic
+        return cv2.cvtColor(frame, cv2.COLOR_BGR2YUV_I420)
+
+    def postprocess_results(self, bboxes, scores, indices):
+        # Convert results to a more usable format
+        results = []
+        for idx in indices:
+            if scores[idx] > 0.5:  # Assuming a threshold for confidence
+                results.append(bboxes[idx])
+        return results
+
+    def release(self):
+        # Cleanup resources if necessary
+        self.model.cleanup()
