@@ -241,14 +241,14 @@ bool processBallDetection(
     int bestBallIdx = indices[ballClassId][0];
     
     // Convert bounding box to actual frame coordinates
-    float x1 = (bboxes[ballClassId][bestBallIdx].x - x_shift) / x_scale;
-    float y1 = (bboxes[ballClassId][bestBallIdx].y - y_shift) / y_scale;
     float width = bboxes[ballClassId][bestBallIdx].width / x_scale;
     float height = bboxes[ballClassId][bestBallIdx].height / y_scale;
+    float y1 = height - (bboxes[ballClassId][bestBallIdx].y - y_shift) / y_scale; // Remove inversion
+    float x1 = (bboxes[ballClassId][bestBallIdx].x - x_shift) / x_scale;
     
     // Calculate ball center
     float ball_center_x = x1 + width / 2;
-    float ball_center_y = y1 + height / 2;
+    float ball_center_y = y1 + height / 2; // Adjust for non-inverted y-coordinate
     
     // Get frame dimensions
     int frameWidth = frame.cols;

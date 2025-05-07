@@ -221,16 +221,18 @@ void drawDetections(cv::Mat& frame,
         
         for (auto it = indices[cls_id].begin(); it != indices[cls_id].end(); ++it) {
             float x1 = (bboxes[cls_id][*it].x - x_shift) / x_scale;
+            float height = frame.rows;
             float y1 = (bboxes[cls_id][*it].y - y_shift) / y_scale;
             float x2 = x1 + (bboxes[cls_id][*it].width) / x_scale;
             float y2 = y1 + (bboxes[cls_id][*it].height) / y_scale;
             float score = scores[cls_id][*it];
+            
             std::string name = object_names[cls_id % CLASSES_NUM];
 
             // Calculate center point
             float center_x = (x1 + x2) / 2.0;
             float center_y = (y1 + y2) / 2.0;
-
+            float correct_y = height - center_y; // Correct y-coordinate for OpenCV
             // Draw rectangle
             cv::Scalar color = (cls_id == 0) ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255); // Green for person, Red for sports ball
             cv::rectangle(frame, cv::Point(x1, y1), cv::Point(x2, y2), color, LINE_SIZE);
@@ -242,7 +244,7 @@ void drawDetections(cv::Mat& frame,
             // For sports balls, print central point and draw a marker
             if (name == "sports ball") {
                 // Print central point coordinates
-                std::cout << "Sports Ball Central Point: (" << center_x << ", " << center_y << ")" << std::endl;
+                std::cout << "Sports Ball Central Point: (" << center_x << ", " << correct_y << ")" << std::endl;
                 
                 // Draw central point with a cross marker
                 cv::drawMarker(frame, cv::Point(center_x, center_y), cv::Scalar(255, 255, 0), 
@@ -250,7 +252,7 @@ void drawDetections(cv::Mat& frame,
                 
                 // Display central point coordinates on the frame
                 std::string center_text = "Center: (" + std::to_string(int(center_x)) + 
-                                         ", " + std::to_string(int(center_y)) + ")";
+                                         ", " + std::to_string(int(correct_y)) + ")";
                 cv::putText(frame, center_text, cv::Point(x1, y2 + 20), 
                            cv::FONT_HERSHEY_SIMPLEX, FONT_SIZE, cv::Scalar(255, 255, 0), 
                            FONT_THICKNESS, cv::LINE_AA);
