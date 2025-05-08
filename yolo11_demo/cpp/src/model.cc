@@ -1,4 +1,7 @@
-#include "include/model.h"
+#include "model.h"
+#include "utils.h"
+#include <iostream>
+#include <string>
 
 int loadModel(hbPackedDNNHandle_t &packed_dnn_handle, hbDNNHandle_t &dnn_handle, 
               int &input_H, int &input_W, int order[6]) {

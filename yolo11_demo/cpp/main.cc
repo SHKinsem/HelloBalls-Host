@@ -25,7 +25,6 @@ limitations under the License.
 #include "include/utils.h"
 #include "include/preprocess.h"
 #include "include/postprocess.h"
-#include "include/serial_comm.h"
 #include "include/pid_controller.h"
 
 // Function to find ball positions and update motor speeds
@@ -34,7 +33,7 @@ bool processBallDetection(
     const std::vector<std::vector<float>>& scores,
     const std::vector<std::vector<int>>& indices,
     float x_scale, float y_scale, int x_shift, int y_shift,
-    PIDController& pidController, SerialComm& serialComm,
+    PIDController& pidController,
     cv::Mat& frame);
 
 int main(int argc, char* argv[]) {
@@ -125,9 +124,6 @@ int main(int argc, char* argv[]) {
     // Main loop
     cv::Mat frame;
     while (true) {
-        // Check and attempt to reconnect serial port if needed
-        // serialComm.checkConnection();
-        
         // Get a frame from camera
         if (!cap.read(frame)) {
             std::cerr << "Error: Could not read frame from camera" << std::endl;
@@ -170,14 +166,8 @@ int main(int argc, char* argv[]) {
         
         // Process ball detection and update motor speeds
         // processBallDetection(bboxes, scores, indices, x_scale, y_scale, 
-        //                    x_shift, y_shift, pidController, serialComm, frame);
+        //                    x_shift, y_shift, pidController, frame);
         
-        // Display connection status
-        std::string connStatus = "Serial: ";
-        // connStatus += serialComm.connected() ? serialComm.getPortName() + " (Connected)" : "Disconnected";
-        // cv::putText(frame, connStatus, cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.7, 
-        //            serialComm.connected() ? cv::Scalar(0, 255, 0) : cv::Scalar(0, 0, 255), 2, cv::LINE_AA);
-
         // Calculate and display FPS
         float fps = fpsCalc.update();
         std::string fps_text = "FPS: " + std::to_string(static_cast<int>(fps));
@@ -202,11 +192,6 @@ int main(int argc, char* argv[]) {
         // }
     }
 
-    // Stop motors before exiting
-    // if (serialComm.connected()) {
-    //     serialComm.sendMotorSpeeds(0, 0);
-    // }
-
     // Cleanup resources
     cleanupModel(packed_dnn_handle, input, output, output_count);
     
@@ -223,7 +208,7 @@ bool processBallDetection(
     const std::vector<std::vector<float>>& scores,
     const std::vector<std::vector<int>>& indices,
     float x_scale, float y_scale, int x_shift, int y_shift,
-    PIDController& pidController, SerialComm& serialComm,
+    PIDController& pidController,
     cv::Mat& frame) {
     
     // Check for sports ball class (usually 32 in COCO dataset)
@@ -231,9 +216,6 @@ bool processBallDetection(
     
     // if (ballClassId >= bboxes.size() || indices[ballClassId].empty()) {
     //     // No ball detected, stop motors
-    //     if (serialComm.connected()) {
-    //         serialComm.sendMotorSpeeds(0, 0);
-    //     }
     //     return false;
     // }
     
@@ -300,11 +282,6 @@ bool processBallDetection(
     // Display error and PID output
     std::string errorText = "Error: " + std::to_string(int(x_error)) + " PID: " + std::to_string(int(steering));
     cv::putText(frame, errorText, cv::Point(10, 120), cv::FONT_HERSHEY_SIMPLEX, 0.7, cv::Scalar(255, 255, 255), 2);
-    
-    // // Send motor speeds to MCU
-    // if (serialComm.connected()) {
-    //     serialComm.sendMotorSpeeds(leftSpeed, rightSpeed);
-    // }
     
     return true;
 }

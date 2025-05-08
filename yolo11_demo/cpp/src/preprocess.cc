@@ -1,5 +1,6 @@
-#include "include/preprocess.h"
-#include "include/config.h"
+#include "preprocess.h"
+#include "config.h"
+#include <iostream>
 #include <string.h>
 
 void preprocess(const cv::Mat& frame, cv::Mat& img_nv12, 

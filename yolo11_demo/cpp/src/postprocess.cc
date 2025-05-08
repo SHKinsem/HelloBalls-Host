@@ -1,5 +1,8 @@
-#include "include/postprocess.h"
-#include "include/utils.h"
+#include "postprocess.h"
+#include "config.h"
+#include "utils.h"
+#include <iostream>
+#include <algorithm>
 #include <cmath>
 
 void postprocess(hbDNNTensor* output, int order[6],

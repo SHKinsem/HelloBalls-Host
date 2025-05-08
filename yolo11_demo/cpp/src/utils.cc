@@ -1,4 +1,5 @@
-#include "include/utils.h"
+#include "utils.h"
+#include "config.h"
 
 // COCO Names
 std::vector<std::string> object_names = {
