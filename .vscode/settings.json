@@ -1,4 +1,7 @@
 {
     "cmake.sourceDirectory": "/home/sunrise/Documents/HelloBalls-Host/yolo11_demo/cpp",
-    "idf.pythonInstallPath": "/usr/bin/python"
+    "idf.pythonInstallPath": "/usr/bin/python",
+    "idf.port": "/dev/ttyACM0",
+    "idf.espIdfPath": "/home/sunrise/esp/v5.4/esp-idf",
+    "idf.toolsPath": "/home/sunrise/.espressif"
 }

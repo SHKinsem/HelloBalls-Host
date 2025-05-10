@@ -7,6 +7,8 @@ import os
 import termios
 import fcntl
 import select
+import threading
+import queue
 
 class SerialComm:
     """
@@ -14,7 +16,7 @@ class SerialComm:
     Sends messages in the format "state,motor_speed_1,motor_speed_2".
     """
     
-    def __init__(self, port=None, baud_rate=115200, timeout=1, auto_reconnect=True, reconnect_interval=2):
+    def __init__(self, port=None, baud_rate=115200, timeout=0.1, auto_reconnect=True, reconnect_interval=2):
         """
         Initialize the serial communication.
         
@@ -33,6 +35,7 @@ class SerialComm:
         self.auto_reconnect = auto_reconnect
         self.reconnect_interval = reconnect_interval
         self.last_reconnect_time = 0
+        self.message_buffer = []
         
     @staticmethod
     def list_available_ports():
@@ -121,6 +124,11 @@ class SerialComm:
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE
             )
+            
+            # Set non-blocking mode
+            self.ser.nonblocking = True
+            self.ser.timeout = 0
+            
             self.connected = True
             print(f"Connected to {self.port} at {self.baud_rate} baud")
             return True
@@ -188,15 +196,17 @@ class SerialComm:
             # Format the command as "state,motor_speed_1,motor_speed_2"
             command = f"{state},{motor_speed_1},{motor_speed_2}\n"
             self.ser.write(command.encode('ascii'))
+            # Flush to ensure immediate transmission
+            self.ser.flush()
             return True
         except Exception as e:
             print(f"Error sending command: {e}")
             self.connected = False  # Mark as disconnected to trigger reconnect on next attempt
             return False
     
-    def read_response(self, timeout=1.0):
+    def read_response(self, timeout=0.01):
         """
-        Read a response from the MCU.
+        Read a response from the MCU with optimized non-blocking reads.
         If auto_reconnect is enabled and the connection is lost, tries to reconnect.
         
         Args:
@@ -207,88 +217,97 @@ class SerialComm:
         """
         # Ensure connection is active
         if not self.ensure_connection():
-            print("Not connected to serial port and reconnection failed")
             return None
             
         try:
-            # Check if data is available to read
+            buffer = b''
             start_time = time.time()
+            
+            # Non-blocking read with timeout
             while (time.time() - start_time) < timeout:
                 if self.ser.in_waiting > 0:
-                    return self.ser.readline().decode('ascii').strip()
-                time.sleep(0.01)
+                    chunk = self.ser.read(self.ser.in_waiting)
+                    buffer += chunk
+                    if b'\n' in buffer:
+                        break
+                else:
+                    # Tiny sleep to prevent CPU hogging
+                    time.sleep(0.001)
+                    
+            if buffer:
+                # Process and return the first complete line
+                lines = buffer.split(b'\n')
+                return lines[0].decode('ascii', errors='ignore').strip()
             return None
         except Exception as e:
             print(f"Error reading response: {e}")
-            self.connected = False  # Mark as disconnected to trigger reconnect on next attempt
+            self.connected = False
             return None
             
-    def receive_status_message(self, timeout=1.0):
+    def receive_status_message(self, timeout=0.01):
         """
         Receive and parse a status message in the format:
         "MSG,state,wheel1_distance,wheel2_distance,imu_x,imu_y,imu_z,imu_yaw"
         
-        This function will filter for messages that start with "MSG" and parse
-        them into a structured dictionary.
+        This function uses optimized non-blocking reads.
         
         Args:
             timeout (float): Maximum time to wait for a valid message
             
         Returns:
-            dict: Parsed message with the following keys:
-                - state: Current state of the device
-                - wheel1_distance: Distance traveled by wheel 1
-                - wheel2_distance: Distance traveled by wheel 2
-                - imu_x: IMU X value
-                - imu_y: IMU Y value 
-                - imu_z: IMU Z value
-                - imu_yaw: IMU Yaw value
-                Or None if no valid message received
+            dict: Parsed message or None if no valid message received
         """
         # Ensure connection is active
         if not self.ensure_connection():
-            print("Not connected to serial port and reconnection failed")
             return None
             
         try:
-            # Keep trying to read until we get a valid message or timeout
+            buffer = b''
             start_time = time.time()
-            while (time.time() - start_time) < timeout:
-                if self.ser.in_waiting > 0:
-                    line = self.ser.readline().decode('ascii').strip()
-                    
-                    # Check if this is a status message (starts with MSG)
-                    if line.startswith("MSG"):
-                        parts = line.split(',')
-                        
-                        # Verify message format
-                        if len(parts) >= 8:  # MSG + 7 data fields
-                            try:
-                                # Parse the message into a dictionary
-                                status = {
-                                    'state': int(parts[1]),
-                                    'wheel1_distance': float(parts[2]),
-                                    'wheel2_distance': float(parts[3]),
-                                    'imu_x': float(parts[4]),
-                                    'imu_y': float(parts[5]), 
-                                    'imu_z': float(parts[6]),
-                                    'imu_yaw': float(parts[7])
-                                }
-                                return status
-                            except (ValueError, IndexError) as e:
-                                print(f"Error parsing status message: {e}")
-                                print(f"Raw message: {line}")
-                                # Continue trying to read another message
-                        else:
-                            print(f"Invalid status message format: {line}")
-                            # Continue trying to read another message
-                time.sleep(0.01)
             
-            # Timeout reached without finding a valid message
+            # Process any existing data in buffer
+            if self.ser.in_waiting > 0:
+                # Read all available data
+                buffer = self.ser.read(self.ser.in_waiting)
+                
+                # Process all complete lines in buffer
+                if b'\n' in buffer:
+                    lines = buffer.split(b'\n')
+                    # Keep the incomplete last line in the buffer
+                    if not buffer.endswith(b'\n'):
+                        buffer = lines[-1]
+                        lines = lines[:-1]
+                    else:
+                        buffer = b''
+                    
+                    # Process all complete lines
+                    for line in lines:
+                        if line:
+                            decoded_line = line.decode('ascii', errors='ignore').strip()
+                            # Check if this is a status message (starts with MSG)
+                            if decoded_line.startswith("MSG"):
+                                parts = decoded_line.split(',')
+                                
+                                # Verify message format
+                                if len(parts) >= 8:  # MSG + 7 data fields
+                                    try:
+                                        # Parse the message into a dictionary
+                                        status = {
+                                            'state': int(parts[1]),
+                                            'wheel1_distance': float(parts[2]),
+                                            'wheel2_distance': float(parts[3]),
+                                            'imu_x': float(parts[4]),
+                                            'imu_y': float(parts[5]), 
+                                            'imu_z': float(parts[6]),
+                                            'imu_yaw': float(parts[7])
+                                        }
+                                        return status
+                                    except (ValueError, IndexError):
+                                        pass
             return None
         except Exception as e:
             print(f"Error reading status message: {e}")
-            self.connected = False  # Mark as disconnected to trigger reconnect on next attempt
+            self.connected = False
             return None
 
 
@@ -298,8 +317,8 @@ if __name__ == "__main__":
     auto_port = SerialComm.find_port()
     print(f"Auto-detected port: {auto_port}")
     
-    # Create a SerialComm instance with auto-detection and auto-reconnect
-    serial_comm = SerialComm(auto_reconnect=True)
+    # Create a SerialComm instance with auto-detection, auto-reconnect and shorter timeout
+    serial_comm = SerialComm(auto_reconnect=True, timeout=0.01)
     
     try:
         # Connect to the auto-detected serial port
@@ -309,7 +328,7 @@ if __name__ == "__main__":
             # Send some test commands
             print("Sending stop command (0, 0, 0)")
             serial_comm.send_command(0, 0, 0)
-            time.sleep(1)
+            time.sleep(0.1)  # Reduced sleep time
             
             # Choose mode
             mode = input("Choose mode - [1] Send at 50Hz, [2] Receive status messages, [3] Both, [4] Keyboard controller: ")
@@ -334,8 +353,8 @@ if __name__ == "__main__":
                 key_last_read_time = 0
                 key_timeout = 0.1  # Consider key released if no new input in 100ms
                 
-                # Keyboard detection frequency settings
-                keyboard_check_interval = 0.1  # 10Hz keyboard polling
+                # Keyboard detection settings - increase frequency
+                keyboard_check_interval = 0.005  # 200Hz keyboard polling for better responsiveness
                 last_keyboard_check_time = 0
                 
                 # Reduce terminal output
@@ -354,11 +373,13 @@ if __name__ == "__main__":
                     fcntl.fcntl(sys.stdin, fcntl.F_SETFL, os.O_NONBLOCK)
                     
                     running = True
+                    last_serial_time = 0
+                    serial_interval = 0.02  # 50Hz for serial communication
+                    
                     while running:
-                        start_time = time.time()
-                        current_time = start_time
+                        current_time = time.time()
                         
-                        # Check keyboard at specified frequency (10Hz)
+                        # Check keyboard at higher frequency than serial commands
                         check_keyboard = current_time - last_keyboard_check_time >= keyboard_check_interval
                         
                         if check_keyboard:
@@ -392,65 +413,68 @@ if __name__ == "__main__":
                                 # Send stop command when key is released
                                 serial_comm.send_command(0, 0, 0)
                                 last_command = (0, 0, 0)
-                                continue
                         
-                        # Process the current active key (this happens at full 50Hz)
-                        command = None
-                        if current_key == 'r':
-                            # Toggle state between 1 and 2
-                            current_state = 2 if current_state == 1 else 1
-                            print(f"State toggled to: {current_state}")
-                            current_key = None  # Reset after toggle
-                        elif current_key == ' ':
-                            # Stop command (state 0)
-                            command = (0, 0, 0)
-                        elif current_key == 'w':
-                            # Forward
-                            command = (current_state, wheel_speed, wheel_speed)
-                        elif current_key == 's':
-                            # Backward
-                            command = (current_state, -wheel_speed, -wheel_speed)
-                        elif current_key == 'a':
-                            # Left turn
-                            command = (current_state, wheel_speed, -wheel_speed)
-                        elif current_key == 'd':
-                            # Right turn
-                            command = (current_state, -wheel_speed, wheel_speed)
+                        # Process serial communications at 50Hz 
+                        # (decoupled from keyboard input for more responsive controls)
+                        send_serial = current_time - last_serial_time >= serial_interval
                         
-                        # Send command (every frame at 50Hz while key is held)
-                        if command:
-                            serial_comm.send_command(*command)
+                        if send_serial:
+                            last_serial_time = current_time
                             
-                            # Only print when command changes and not too frequently
-                            if command != last_command and current_time - last_output_time >= output_interval:
-                                last_command = command
-                                last_output_time = current_time
+                            # Process the current active key
+                            command = None
+                            if current_key == 'r':
+                                # Toggle state between 1 and 2
+                                current_state = 2 if current_state == 1 else 1
+                                print(f"State toggled to: {current_state}")
+                                current_key = None  # Reset after toggle
+                            elif current_key == ' ':
+                                # Stop command (state 0)
+                                command = (0, 0, 0)
+                            elif current_key == 'w':
+                                # Forward
+                                command = (current_state, wheel_speed, wheel_speed)
+                            elif current_key == 'a':
+                                # Left turn
+                                command = (current_state, wheel_speed//2, -wheel_speed//2)
+                            elif current_key == 'd':
+                                # Right turn
+                                command = (current_state, -wheel_speed//2, wheel_speed//2)
+                            elif current_key == 's':
+                                # Backward
+                                command = (current_state, -wheel_speed, -wheel_speed)
+                            
+                            # Send command at 50Hz while key is held
+                            if command:
+                                serial_comm.send_command(*command)
                                 
-                                # Print the current command
-                                action = "STOP" if command[0] == 0 else {
-                                    (current_state, wheel_speed, wheel_speed): "FORWARD",
-                                    (current_state, -wheel_speed, -wheel_speed): "BACKWARD",
-                                    (current_state, -wheel_speed, wheel_speed): "LEFT TURN",
-                                    (current_state, wheel_speed, -wheel_speed): "RIGHT TURN"
-                                }.get(command, "CUSTOM")
-                                
-                                print(f"Action: {action} | Command: state={command[0]}, m1={command[1]}, m2={command[2]}")
+                                # Only print when command changes and not too frequently
+                                if command != last_command and current_time - last_output_time >= output_interval:
+                                    last_command = command
+                                    last_output_time = current_time
+                                    
+                                    # Print the current command
+                                    action = "STOP" if command[0] == 0 else {
+                                        (current_state, wheel_speed, wheel_speed): "FORWARD",
+                                        (current_state, -wheel_speed, -wheel_speed): "BACKWARD",
+                                        (current_state, -wheel_speed, wheel_speed): "LEFT TURN",
+                                        (current_state, wheel_speed, -wheel_speed): "RIGHT TURN"
+                                    }.get(command, "CUSTOM")
+                                    
+                                    print(f"Action: {action} | Command: state={command[0]}, m1={command[1]}, m2={command[2]}")
+                            
+                            # If receiving is enabled along with keyboard, do it at the same frequency as sending
+                            if receive_active:
+                                status = serial_comm.receive_status_message(timeout=0.001)  # Very short timeout
+                                if status and current_time - last_output_time >= output_interval:
+                                    print(f"Received status: State={status['state']}, "
+                                        f"Wheels=({status['wheel1_distance']:.2f},{status['wheel2_distance']:.2f}), "
+                                        f"IMU=({status['imu_x']:.2f},{status['imu_y']:.2f},{status['imu_z']:.2f}), "
+                                        f"Yaw={status['imu_yaw']:.2f}")
+                                    last_output_time = current_time
                         
-                        # If receiving is enabled along with keyboard
-                        if receive_active:
-                            status = serial_comm.receive_status_message(timeout=0.01)
-                            if status and current_time - last_output_time >= output_interval:
-                                print(f"Received status: State={status['state']}, "
-                                      f"Wheels=({status['wheel1_distance']:.2f},{status['wheel2_distance']:.2f}), "
-                                      f"IMU=({status['imu_x']:.2f},{status['imu_y']:.2f},{status['imu_z']:.2f}), "
-                                      f"Yaw={status['imu_yaw']:.2f}")
-                                last_output_time = current_time
-                        
-                        # Calculate sleep time to maintain approximately 50Hz frequency
-                        elapsed = time.time() - start_time
-                        sleep_time = max(0, 0.02 - elapsed)  # 0.02s = 20ms = 50Hz
-                        if sleep_time > 0:
-                            time.sleep(sleep_time)
+                        # Tiny sleep to prevent CPU hogging but maintain responsiveness
+                        time.sleep(0.001)
                 
                 finally:
                     # Restore terminal settings
@@ -459,32 +483,28 @@ if __name__ == "__main__":
                 print("Press Ctrl+C to exit")
                 
                 # Loop to send and/or receive messages (non-keyboard mode)
+                last_send_time = 0
+                send_interval = 0.02  # 50Hz
+                
                 while True:
-                    start_time = time.time()
+                    current_time = time.time()
                     
-                    # Send command if enabled
-                    if send_active:
+                    # Send command at consistent 50Hz rate
+                    if send_active and current_time - last_send_time >= send_interval:
                         serial_comm.send_command(1, 100, 100)
+                        last_send_time = current_time
                     
-                    # Receive and process status message if enabled
+                    # Receive and process status message if enabled (do this more frequently)
                     if receive_active:
-                        status = serial_comm.receive_status_message(timeout=0.01)  # Short timeout to maintain timing
+                        status = serial_comm.receive_status_message(timeout=0.001)  # Very short timeout
                         if status:
                             print(f"Received status: State={status['state']}, "
                                 f"Wheels=({status['wheel1_distance']:.2f},{status['wheel2_distance']:.2f}), "
                                 f"IMU=({status['imu_x']:.2f},{status['imu_y']:.2f},{status['imu_z']:.2f}), "
                                 f"Yaw={status['imu_yaw']:.2f}")
                     
-                    # Calculate sleep time to maintain approximately 50Hz frequency
-                    if send_active:
-                        elapsed = time.time() - start_time
-                        sleep_time = max(0, 0.02 - elapsed)  # 0.02s = 20ms = 50Hz
-                        
-                        if sleep_time > 0:
-                            time.sleep(sleep_time)
-                    else:
-                        # If we're not sending, still provide some delay to not overload CPU
-                        time.sleep(0.01)
+                    # Small sleep to prevent CPU hogging
+                    time.sleep(0.001)
                 
     except KeyboardInterrupt:
         print("\nTest interrupted by user")
