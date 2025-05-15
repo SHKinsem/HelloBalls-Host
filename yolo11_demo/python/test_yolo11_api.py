@@ -24,90 +24,72 @@ SPORTS_BALL_CLASS = 32  # Sports ball class ID in COCO dataset
 
 def find_model_file():
     """Find the YOLO model file using the exact same path as in C++"""
-    # First try the exact C++ path relative to current directory
-    cpp_relative_path = "../../ptq_models/yolo11m_detect_bayese_640x640_nv12_modified.bin"
-    
-    # Convert to absolute path for easier debugging
+    # First, check if the model exists in the standard location
     base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    cpp_absolute_path = os.path.normpath(os.path.join(base_dir, cpp_relative_path))
+    model_filename = "yolo11m_detect_bayese_640x640_nv12_modified.bin"
     
-    print(f"Looking for model at C++ path: {cpp_absolute_path}")
+    # Absolute path to the model in the ptq_models directory
+    absolute_path = os.path.join(base_dir, "ptq_models", model_filename)
     
-    # Check if the file exists at the exact C++ path
+    if os.path.exists(absolute_path):
+        print(f"Found model at: {absolute_path}")
+        return absolute_path
+    
+    # If not found, try the path relative to where we changed the working directory (cpp dir)
+    cpp_relative_path = "../../ptq_models/" + model_filename
+    cpp_absolute_path = os.path.normpath(os.path.join(cpp_dir, cpp_relative_path))
+    
+    print(f"Looking for model at C++ relative path: {cpp_relative_path}")
+    print(f"Which resolves to: {cpp_absolute_path}")
+    
+    # Check if the file exists at the path the C++ code would use
     if os.path.exists(cpp_absolute_path):
         print(f"Found model at: {cpp_absolute_path}")
         return cpp_absolute_path
     
-    # If file doesn't exist, create the directory and suggest copying the model
-    target_dir = os.path.dirname(cpp_absolute_path)
-    if os.path.exists("/sunrise/Documents/HelloBalls-Host/yolo11_demo/ptq_models/yolo11s_detect_bayese_640x640_nv12_modified.bin"):
-        print(f"\nFound yolo11s model but C++ code needs yolo11m model.")
-        print(f"To use the model, you need to:")
-        print(f"1. Create directory: mkdir -p {target_dir}")
-        print(f"2. Either copy and rename the existing model:")
-        print(f"   cp /sunrise/Documents/HelloBalls-Host/yolo11_demo/ptq_models/yolo11s_detect_bayese_640x640_nv12_modified.bin {cpp_absolute_path}")
-        print(f"   OR download the correct yolo11m model")
-    
-    # Continue with the original fallback search patterns
-    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
-    # Use the exact model path defined in C++ code
-    cpp_model_path = os.path.join(base_dir, "../../ptq_models/yolo11m_detect_bayese_640x640_nv12_modified.bin")
-    
-    # Normalize the path to handle the relative path properly
-    cpp_model_path = os.path.normpath(cpp_model_path)
-    
-    if os.path.exists(cpp_model_path):
-        print(f"Found model at: {cpp_model_path}")
-        return cpp_model_path
-    
-    # If not found at the exact location, try to locate it relative to the current directory
-    alt_path = os.path.join(os.path.dirname(base_dir), "ptq_models/yolo11m_detect_bayese_640x640_nv12_modified.bin")
-    if os.path.exists(alt_path):
-        print(f"Found model at: {alt_path}")
-        return alt_path
-        
-    # Also check for .bin files with similar names in case the exact filename is slightly different
-    search_patterns = [
-        os.path.join(base_dir, "../../ptq_models/*.bin"),
-        os.path.join(base_dir, "../ptq_models/*.bin"),
-        os.path.join(base_dir, "ptq_models/*.bin"),
-        os.path.join(base_dir, "**/ptq_models/*.bin"),
-        # Also check for ONNX models in case they're used as a fallback
-        os.path.join(base_dir, "models/*.onnx"),
-        os.path.join(base_dir, "**/*.bin")  # Deep search for any .bin file
+    # If model still not found, search in other common locations
+    search_paths = [
+        os.path.join(base_dir, "ptq_models", model_filename),
+        os.path.join(base_dir, "..", "ptq_models", model_filename),
+        os.path.join(os.path.dirname(base_dir), "ptq_models", model_filename),
+        "/home/sunrise/Documents/HelloBalls-Host/yolo11_demo/ptq_models/" + model_filename
     ]
     
-    # Try each pattern in order
-    for pattern in search_patterns:
-        matches = glob.glob(pattern, recursive=True)
-        if matches:
-            print(f"Found model at: {matches[0]}")
-            return matches[0]
-    
-    # If model still not found, provide detailed error
-    print("\nERROR: YOLO model file not found!")
-    print(f"Expected model path from C++ definition: {cpp_model_path}")
-    print("\nSearch patterns tried:")
-    for pattern in search_patterns:
-        print(f"  - {pattern}")
-    
-    print("\nTo fix this issue:")
-    print("1. Make sure the binary model file exists at: ../../ptq_models/yolo11m_detect_bayese_640x640_nv12_modified.bin")
-    print("   relative to the project root directory")
-    print("2. You can create the directory and place the model there:")
-    ptq_models_dir = os.path.join(os.path.dirname(base_dir), "ptq_models")
-    print(f"   mkdir -p {ptq_models_dir}")
-    print(f"   cp /path/to/your/yolo11m_detect_bayese_640x640_nv12_modified.bin {ptq_models_dir}/")
-    
-    # Allow manual path input as a fallback
-    user_path = input("\nWould you like to enter the model path manually? (y/n): ")
-    if user_path.lower() == 'y':
-        path = input("Enter the full path to the model file: ")
+    for path in search_paths:
         if os.path.exists(path):
             print(f"Found model at: {path}")
             return path
     
+    # If model not found, provide helpful error and suggestions
+    print("\nERROR: YOLO model file not found!")
+    print(f"Expected model file: {model_filename}")
+    
+    # Check if other model files exist that could be used
+    ptq_dir = os.path.join(base_dir, "ptq_models")
+    if os.path.exists(ptq_dir):
+        available_models = [f for f in os.listdir(ptq_dir) if f.endswith('.bin')]
+        if available_models:
+            print("\nAvailable model files:")
+            for model in available_models:
+                print(f"  - {model}")
+            
+            # If we have the yolo11s model but need yolo11m, suggest copying/renaming
+            if "yolo11s_detect_bayese_640x640_nv12_modified.bin" in available_models:
+                print(f"\nFound yolo11s model but C++ code needs yolo11m model.")
+                print(f"To use the model, you could copy and rename the existing model:")
+                print(f"cp {os.path.join(ptq_dir, 'yolo11s_detect_bayese_640x640_nv12_modified.bin')} "
+                      f"{os.path.join(ptq_dir, model_filename)}")
+    
+    # Create an environment variable to specify the model path
+    print("\nTIP: You can also specify the model path using an environment variable:")
+    print("export YOLO11_MODEL_PATH=/path/to/your/model.bin")
+    
+    # Try to read from environment variable as a last resort
+    env_model_path = os.environ.get('YOLO11_MODEL_PATH')
+    if env_model_path and os.path.exists(env_model_path):
+        print(f"Found model at environment variable path: {env_model_path}")
+        return env_model_path
+        
     return None
 
 def preprocess_image_letterbox(frame, input_width, input_height):
@@ -302,17 +284,160 @@ def run_camera_detection():
         print("Error: Failed to load model")
         return False
     
-    # Get input dimensions (use defaults since we don't have a model handle)
-    input_h, input_w = INPUT_HEIGHT, INPUT_WIDTH
+    # Open camera
+    camera_id = 0  # Default camera ID
+    cap = cv2.VideoCapture(camera_id)
     
-    # Now we can proceed with the camera setup and inference
-    # ...
+    if not cap.isOpened():
+        print(f"Error: Could not open camera {camera_id}")
+        return False
     
-    # When done, clean up the model
+    # Set camera resolution
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    
+    # Get actual resolution
+    actual_width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
+    actual_height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    print(f"Camera opened with resolution: {actual_width}x{actual_height}")
+    
+    # Create a PID controller for ball tracking
+    pid_controller = yolo11_api.PIDController(0.05, 0.001, 0.01)
+    
+    # Create FPS counter
+    fps_counter = SimpleFpsCounter()
+    
+    # Track resolution state
+    is720p = True
+    
+    print("Press 'q' to quit, 'r' to toggle resolution")
+    
     try:
-        yolo11_api.cleanup_model()
+        while True:
+            # Capture frame
+            ret, frame = cap.read()
+            if not ret or frame is None:
+                print("Error: Failed to capture frame")
+                break
+            
+            # Get frame dimensions for display purposes
+            height, width = frame.shape[:2]
+            
+            # Preprocess the frame
+            preprocessed_frame, x_scale, y_scale, x_shift, y_shift = preprocess_image_letterbox(
+                frame, INPUT_WIDTH, INPUT_HEIGHT)
+            
+            # Run detection using the C++ API
+            detection_results = yolo11_api.inference(preprocessed_frame)
+            
+            if detection_results:
+                # Draw detections and process ball tracking
+                for cls_id, boxes, confs in zip(detection_results.class_ids, 
+                                               detection_results.bboxes, 
+                                               detection_results.scores):
+                    if cls_id == SPORTS_BALL_CLASS or cls_id == 0:  # Sports ball or person
+                        # Scale box coordinates back to original frame
+                        x = (boxes[0] - x_shift) / x_scale
+                        y = (boxes[1] - y_shift) / y_scale
+                        w = boxes[2] / x_scale
+                        h = boxes[3] / y_scale
+                        
+                        # Draw bounding box
+                        color = (0, 0, 255) if cls_id == SPORTS_BALL_CLASS else (0, 255, 0)
+                        cv2.rectangle(frame, (int(x), int(y)), 
+                                     (int(x + w), int(y + h)), color, 2)
+                        
+                        # Add label
+                        label = f"Ball: {int(confs * 100)}%" if cls_id == SPORTS_BALL_CLASS else f"Person: {int(confs * 100)}%"
+                        cv2.putText(frame, label, (int(x), int(y - 5)), 
+                                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
+                        
+                        # For balls, calculate center and draw tracking info
+                        if cls_id == SPORTS_BALL_CLASS:
+                            # Calculate ball center
+                            ball_center_x = x + w / 2
+                            ball_center_y = y + h / 2
+                            
+                            # Draw center point
+                            cv2.circle(frame, (int(ball_center_x), int(ball_center_y)), 5, (0, 255, 255), -1)
+                            
+                            # Calculate target position (bottom center of frame)
+                            target_x = width / 2
+                            target_y = height * 0.9  # 90% down the frame
+                            
+                            # Draw target position
+                            cv2.circle(frame, (int(target_x), int(target_y)), 10, (255, 255, 0), 2)
+                            cv2.line(frame, (int(target_x - 15), int(target_y)), 
+                                    (int(target_x + 15), int(target_y)), (255, 255, 0), 2)
+                            cv2.line(frame, (int(target_x), int(target_y - 15)), 
+                                    (int(target_x), int(target_y + 15)), (255, 255, 0), 2)
+                            
+                            # Draw line from ball to target
+                            cv2.line(frame, (int(ball_center_x), int(ball_center_y)), 
+                                    (int(target_x), int(target_y)), (0, 255, 255), 2)
+                            
+                            # Calculate error (distance from target position)
+                            x_error = ball_center_x - target_x
+                            
+                            # Use PID controller to calculate steering value
+                            steering = pid_controller.calculate(x_error)
+                            
+                            # Convert steering to motor speeds
+                            base_speed = 50  # Base forward speed
+                            left_speed = base_speed
+                            right_speed = base_speed
+                            
+                            if steering > 0:
+                                # Ball is to the right, need to turn right
+                                left_speed = base_speed + abs(steering)
+                                right_speed = base_speed - abs(steering)
+                            else:
+                                # Ball is to the left, need to turn left
+                                left_speed = base_speed - abs(steering)
+                                right_speed = base_speed + abs(steering)
+                            
+                            # Ensure speeds are within bounds
+                            left_speed = max(min(left_speed, 100), -100)
+                            right_speed = max(min(right_speed, 100), -100)
+                            
+                            # Display motor speeds on frame
+                            motor_text = f"Motors L:{int(left_speed)} R:{int(right_speed)}"
+                            cv2.putText(frame, motor_text, (10, 90), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                            
+                            # Display error and PID output
+                            error_text = f"Error: {int(x_error)} PID: {int(steering)}"
+                            cv2.putText(frame, error_text, (10, 120), 
+                                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            
+            # Display fps
+            fps = fps_counter.update()
+            cv2.putText(frame, f"FPS: {fps:.1f}", (10, 30), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
+            
+            # Show the frame
+            cv2.imshow("YOLOv11m Object Detection", frame)
+            
+            # Check for key presses
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('r'):
+                is720p = toggle_resolution_cpp_style(cap, is720p)
+    
+    except KeyboardInterrupt:
+        print("Detection stopped by user")
     except Exception as e:
-        print(f"Error cleaning up model: {e}")
+        print(f"Error in detection loop: {e}")
+    finally:
+        # Release resources
+        cap.release()
+        cv2.destroyAllWindows()
+        try:
+            yolo11_api.cleanup_model()
+            print("Model resources released")
+        except Exception as e:
+            print(f"Error cleaning up model: {e}")
     
     return True
 
@@ -363,4 +488,4 @@ if __name__ == "__main__":
     print("\nTest Results:")
     print(f"PID Controller: {'PASS' if pid_success else 'FAIL'}")
     print(f"Model Basics: {'PASS' if model_basics_success else 'FAIL'}")
-    print(f"Camera Detection: {'PASS' if camera_success else 'FAIL'}") 
+    print(f"Camera Detection: {'PASS' if camera_success else 'FAIL'}")

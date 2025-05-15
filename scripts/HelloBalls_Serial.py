@@ -352,7 +352,7 @@ if __name__ == "__main__":
                 key_last_read_time = 0
                 key_timeout = 0.1  # Consider key released if no new input in 100ms
                 # Track key state separately from key input to maintain continuous movement
-                active_movement_key = None  # Key that's actually controlling movement
+                active_movement_key = None  # Key that 's actually controlling movement
                 
                 # Keyboard detection settings - increase frequency
                 keyboard_check_interval = 0.005  # 200Hz keyboard polling for better responsiveness
