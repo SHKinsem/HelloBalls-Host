@@ -1,7 +1,7 @@
 import cv2
 import os
 import numpy as np
-import onnxruntime as ort
+import onnxruntime as ort # type: ignore
 
 # Load the YOLO model
 MODEL_PATH = os.path.join(os.getcwd(), "scripts/yolov11_roboflow_ir9.onnx")

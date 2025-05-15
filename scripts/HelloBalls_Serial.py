@@ -316,10 +316,9 @@ if __name__ == "__main__":
     print("Available ports:", SerialComm.list_available_ports())
     auto_port = SerialComm.find_port()
     print(f"Auto-detected port: {auto_port}")
-    
     # Create a SerialComm instance with auto-detection, auto-reconnect and shorter timeout
-    serial_comm = SerialComm(auto_reconnect=True, timeout=0.01)
-    
+    serial_comm = SerialComm(auto_reconnect=False, timeout=0.01)
+    serial_comm.connect('/dev/ttyS1')
     try:
         # Connect to the auto-detected serial port
         if serial_comm.connect():
@@ -352,6 +351,8 @@ if __name__ == "__main__":
                 current_key = None  # Current active key
                 key_last_read_time = 0
                 key_timeout = 0.1  # Consider key released if no new input in 100ms
+                # Track key state separately from key input to maintain continuous movement
+                active_movement_key = None  # Key that's actually controlling movement
                 
                 # Keyboard detection settings - increase frequency
                 keyboard_check_interval = 0.005  # 200Hz keyboard polling for better responsiveness
@@ -396,7 +397,14 @@ if __name__ == "__main__":
                                         if key == 'q':
                                             running = False
                                             current_key = None  # Clear current key
+                                            active_movement_key = None  # Clear active movement
+                                        elif key in ['w', 'a', 's', 'd', ' ']:
+                                            # Movement keys - update both current key and active movement key
+                                            current_key = key
+                                            active_movement_key = key
+                                            key_last_read_time = current_time
                                         else:
+                                            # Non-movement keys like 'r'
                                             current_key = key
                                             key_last_read_time = current_time
                                 except IOError:
@@ -404,13 +412,15 @@ if __name__ == "__main__":
                                     pass
                             
                             # Auto-release key if no new input has been received for a while
+                            # This only affects the current_key, not active_movement_key
                             if current_key and current_key not in ['r'] and current_time - key_last_read_time > key_timeout:
-                                # Only print key released message occasionally
-                                if current_time - last_output_time >= output_interval:
+                                # Only print key released message occasionally and only if we're actually changing movement
+                                if active_movement_key and current_time - last_output_time >= output_interval:
                                     print("Key released - stopping movement")
                                     last_output_time = current_time
                                 current_key = None
-                                # Send stop command when key is released
+                                active_movement_key = None  # Stop movement when key is released
+                                # Send stop command when movement key is released
                                 serial_comm.send_command(0, 0, 0)
                                 last_command = (0, 0, 0)
                         
@@ -428,19 +438,19 @@ if __name__ == "__main__":
                                 current_state = 2 if current_state == 1 else 1
                                 print(f"State toggled to: {current_state}")
                                 current_key = None  # Reset after toggle
-                            elif current_key == ' ':
+                            elif active_movement_key == ' ':  # Use active_movement_key for movement commands
                                 # Stop command (state 0)
                                 command = (0, 0, 0)
-                            elif current_key == 'w':
+                            elif active_movement_key == 'w':
                                 # Forward
                                 command = (current_state, wheel_speed, wheel_speed)
-                            elif current_key == 'a':
+                            elif active_movement_key == 'a':
                                 # Left turn
                                 command = (current_state, wheel_speed//2, -wheel_speed//2)
-                            elif current_key == 'd':
+                            elif active_movement_key == 'd':
                                 # Right turn
                                 command = (current_state, -wheel_speed//2, wheel_speed//2)
-                            elif current_key == 's':
+                            elif active_movement_key == 's':
                                 # Backward
                                 command = (current_state, -wheel_speed, -wheel_speed)
                             
