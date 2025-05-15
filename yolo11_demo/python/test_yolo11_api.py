@@ -30,6 +30,11 @@ MODE_BALL_DETECTION = 0
 MODE_PERSON_DETECTION = 1
 MODE_NAMES = ["Ball Detection", "Person Detection"]
 
+# Ball selection algorithms
+BALL_SELECTION_BOTTOM_EDGE = 0  # Select ball with lowest bottom edge (closest to robot)
+BALL_SELECTION_CENTER_PROXIMITY = 1  # Select ball closest to horizontal center
+BALL_SELECTION_MODES = ["Bottom Edge Priority", "Center Proximity"]
+
 def find_model_file():
     """Find the YOLO model file using the exact same path as in C++"""
     # First, check if the model exists in the standard location
@@ -431,6 +436,9 @@ def run_camera_detection():
     # Track detection mode
     detection_mode = MODE_BALL_DETECTION
     
+    # Track ball selection mode
+    ball_selection_mode = BALL_SELECTION_BOTTOM_EDGE
+    
     # Variables to display information in the upper left
     motor_left_speed = 0
     motor_right_speed = 0
@@ -439,8 +447,9 @@ def run_camera_detection():
     detection_confidence = 0
     
     print(f"Window positioned at ({win_x}, {win_y}) with size {window_w}x{window_h}")
-    print("Press 'q' to quit, 'r' to toggle resolution, 'f' to toggle fullscreen, 'm' to switch detection mode")
+    print("Press 'q' to quit, 'r' to toggle resolution, 'f' to toggle fullscreen, 'm' to switch detection mode, 'b' to switch ball selection mode, 'a' to switch ball selection algorithm")
     print(f"Current detection mode: {MODE_NAMES[detection_mode]}")
+    print(f"Current ball selection mode: {BALL_SELECTION_MODES[ball_selection_mode]}")
     
     # Track fullscreen state
     is_fullscreen = False
@@ -466,6 +475,7 @@ def run_camera_detection():
             # Clear detection processed flag
             detection_processed = False
             highest_confidence = 0
+            closest_to_center_distance = float('inf')
             best_detection = None
             
             # First pass: find the best target for current mode
@@ -477,10 +487,27 @@ def run_camera_detection():
                     if ((detection_mode == MODE_BALL_DETECTION and cls_id == SPORTS_BALL_CLASS) or
                         (detection_mode == MODE_PERSON_DETECTION and cls_id == PERSON_CLASS)):
                         
-                        # Keep track of highest confidence detection
-                        if confs > highest_confidence:
-                            highest_confidence = confs
-                            best_detection = (cls_id, boxes, confs)
+                        # Ball selection algorithms
+                        if ball_selection_mode == BALL_SELECTION_BOTTOM_EDGE:
+                            # Calculate bottom Y-coordinate of the bounding box (bbox)
+                            # Lower Y value means higher on screen, so we want the HIGHEST value
+                            # to get the ball closest to the bottom of the frame
+                            ball_bottom_y = (boxes[1] + boxes[3] - y_shift) / y_scale
+                            
+                            # Special case for first detection or if this ball is lower (greater Y)
+                            if best_detection is None or ball_bottom_y > closest_to_center_distance:
+                                closest_to_center_distance = ball_bottom_y
+                                best_detection = (cls_id, boxes, confs)
+                                
+                        elif ball_selection_mode == BALL_SELECTION_CENTER_PROXIMITY:
+                            # Calculate horizontal distance to center
+                            ball_center_x = (boxes[0] + boxes[2] / 2 - x_shift) / x_scale
+                            distance_to_center = abs(ball_center_x - width / 2)
+                            
+                            # Choose the ball closest to the center horizontally
+                            if best_detection is None or distance_to_center < closest_to_center_distance:
+                                closest_to_center_distance = distance_to_center
+                                best_detection = (cls_id, boxes, confs)
             
             # Draw info panel in the upper left
             # Semi-transparent black background for info panel
@@ -602,14 +629,6 @@ def run_camera_detection():
             
             # Display message if no target object is detected
             if not detection_processed:
-                # if detection_mode == MODE_BALL_DETECTION:
-                #     cv2.putText(frame, "No ball detected", (width//2 - 100, height//2), 
-                #                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 0, 255), 2)
-                # else:
-                #     cv2.putText(frame, "No person detected", (width//2 - 120, height//2), 
-                #                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
-                
-                # # Reset control values when nothing detected
                 motor_left_speed = 0
                 motor_right_speed = 0
                 error_value = 0
@@ -641,6 +660,14 @@ def run_camera_detection():
                 print(f"Switched to {MODE_NAMES[detection_mode]} mode")
                 # Reset PID controller when switching modes to avoid carry-over
                 pid_controller = yolo11_api.PIDController(0.05, 0.001, 0.01)
+            elif key == ord('b'):
+                # Switch ball selection mode
+                ball_selection_mode = (ball_selection_mode + 1) % len(BALL_SELECTION_MODES)
+                print(f"Switched to {BALL_SELECTION_MODES[ball_selection_mode]} mode")
+            elif key == ord('a'):
+                # Switch ball selection algorithm
+                ball_selection_mode = (ball_selection_mode + 1) % len(BALL_SELECTION_MODES)
+                print(f"Switched to {BALL_SELECTION_MODES[ball_selection_mode]} algorithm")
     
     except KeyboardInterrupt:
         print("Detection stopped by user")
