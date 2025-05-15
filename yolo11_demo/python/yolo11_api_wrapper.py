@@ -23,7 +23,7 @@ os.chdir(cpp_dir)
 print(f"Changed working directory to: {os.getcwd()}")
 
 try:
-    import yolo11_api
+    import yolo11_api # type: ignore
 except ImportError as e:
     print(f"Error: Failed to import yolo11_api module: {e}")
     print("Make sure the C++ extension is properly compiled.")

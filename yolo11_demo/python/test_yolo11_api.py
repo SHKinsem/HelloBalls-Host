@@ -9,7 +9,7 @@ import glob  # For searching files
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Import the module
-import yolo11_api
+import yolo11_api # type: ignore
 
 # Change working directory to match the C++ executable's expected location
 cpp_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cpp")
@@ -683,7 +683,7 @@ if __name__ == "__main__":
     
     # Check if mandatory libraries are available
     try:
-        import yolo11_api
+        # import yolo11_api
         print(f"Successfully imported yolo11_api module, version: {getattr(yolo11_api, '__version__', 'unknown')}")
         
         # Display available functions for debugging
