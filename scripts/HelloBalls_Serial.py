@@ -10,6 +10,8 @@ import select
 import threading
 import queue
 
+
+
 class SerialComm:
     """
     Class to handle serial communication with MCU for the HelloBalls project.
@@ -121,7 +123,7 @@ class SerialComm:
                 baudrate=self.baud_rate,
                 timeout=self.timeout,
                 bytesize=serial.EIGHTBITS,
-                parity=serial.PARITY_NONE,
+                parity=serial.PARITY_ODD,
                 stopbits=serial.STOPBITS_ONE
             )
             
