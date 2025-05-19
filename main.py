@@ -534,9 +534,9 @@ def pid_thread(control_rate=50):
     # Initialize PID controllers
     # X controller (horizontal position) - for steering
     x_pid = PIDController(
-        kp=50,            # Proportional gain (reverted to original, for pre-scaled output)
+        kp=40,            # Proportional gain (reverted to original, for pre-scaled output)
         ki=0.05,           # Integral gain (reverted to original, for pre-scaled output)
-        kd=0.1,            # Derivative gain (reverted to original, for pre-scaled output)
+        kd=10.0,            # Derivative gain (reverted to original, for pre-scaled output)
         setpoint=0,         # Target is center of frame (will be converted to normalized coordinates)
         output_limits=(-50, 50) # Pre-scale steering output (-50*10 = -500 to 50*10 = 500)
     )
@@ -594,6 +594,10 @@ def pid_thread(control_rate=50):
             # Detect transitions from ball detected to lost
             if not ball_detected and last_ball_detected:
                 log_message("INFO", "Ball lost")
+                # Reset boost state when ball is lost
+                if hasattr(pid_thread, "boost_active") and pid_thread.boost_active:
+                    pid_thread.boost_active = False
+                    log_message("INFO", "Forward boost canceled: ball lost")
                 
             # Detect transitions from ball lost to detected
             if ball_detected and not last_ball_detected:
@@ -613,26 +617,78 @@ def pid_thread(control_rate=50):
                 normalized_x = (ball_x - frame_width/2) / (frame_width/2)  # -1 (left) to 1 (right)
                 normalized_y = ball_y / frame_height  # 0 (top) to 1 (bottom)
                 
-                # Calculate steering (x_pid) and speed (y_pid) components (pre-scaling)
-                steering = x_pid.calculate(normalized_x)    # Output: -50 to 50
-                base_speed = y_pid.calculate(normalized_y)  # Output: 0 to 100
+                # Define thresholds for "ball is centered" condition
+                x_error_threshold = 0.1  # Ball is within 10% of center horizontally
+                y_error_threshold = 0.1  # Ball is within 10% of target vertically
+                y_target_error = abs(normalized_y - y_pid.setpoint)
                 
-                # Combine components and apply scaling
-                # (base_speed + steering) can range from (0-50)=-50 to (100+50)=150 (pre-scaling)
-                # (base_speed - steering) can range from (0-50)=-50 to (100-(-50))=150 (pre-scaling)
+                # Check if ball is well-centered in both axes
+                ball_centered = (abs(normalized_x) < x_error_threshold and 
+                                 y_target_error < y_error_threshold)
                 
-                scaled_left_speed = (base_speed + steering) * MOTOR_OUTPUT_SCALE
-                scaled_right_speed = (base_speed - steering) * MOTOR_OUTPUT_SCALE
+                # Special "forward boost" mode when ball is centered
+                current_time = time.time()
+                if not hasattr(pid_thread, "boost_start_time"):
+                    pid_thread.boost_start_time = 0
+                if not hasattr(pid_thread, "boost_active"):
+                    pid_thread.boost_active = False
                 
-                left_speed = int(scaled_left_speed)
-                right_speed = int(scaled_right_speed)
+                if ball_centered and not pid_thread.boost_active:
+                    # Start boost mode
+                    log_message("INFO", "Ball centered! Activating forward boost")
+                    pid_thread.boost_start_time = current_time
+                    pid_thread.boost_active = True
+                    
+                # Check if we're in boost mode and it hasn't expired
+                if pid_thread.boost_active:
+                    boost_duration = 1.0  # 1 second forward boost
+                    if current_time - pid_thread.boost_start_time < boost_duration:
+                        # Apply forward boost: equal power to both motors
+                        boost_speed = 1300  # High forward speed during boost
+                        left_speed = boost_speed
+                        right_speed = boost_speed
+                        robot_state = 3  # Special state for boost mode
+                        log_message("INFO", f"Forward boost active: {current_time - pid_thread.boost_start_time:.2f}s")
+                    else:
+                        # Boost duration expired, return to normal control
+                        pid_thread.boost_active = False
+                        log_message("INFO", "Forward boost completed")
+                        
+                        # Reset PID controllers after boost
+                        x_pid.reset()
+                        y_pid.reset()
+                        
+                        # Calculate normal PID outputs
+                        steering = x_pid.calculate(normalized_x)    # Output: -50 to 50
+                        base_speed = y_pid.calculate(normalized_y)  # Output: 0 to 100
+                        
+                        # Apply normal control
+                        scaled_left_speed = (base_speed + steering) * MOTOR_OUTPUT_SCALE
+                        scaled_right_speed = (base_speed - steering) * MOTOR_OUTPUT_SCALE
+                        
+                        left_speed = int(scaled_left_speed)
+                        right_speed = int(scaled_right_speed)
+                        
+                        # Set robot state back to chase ball
+                        robot_state = 1
+                else:
+                    # Normal PID control when not in boost mode
+                    steering = x_pid.calculate(normalized_x)    # Output: -50 to 50
+                    base_speed = y_pid.calculate(normalized_y)  # Output: 0 to 100
+                    
+                    # Combine components and apply scaling
+                    scaled_left_speed = (base_speed + steering) * MOTOR_OUTPUT_SCALE
+                    scaled_right_speed = (base_speed - steering) * MOTOR_OUTPUT_SCALE
+                    
+                    left_speed = int(scaled_left_speed)
+                    right_speed = int(scaled_right_speed)
+                    
+                    # Set robot state to chase ball
+                    robot_state = 1
                 
                 # Ensure speeds are within absolute limits
                 left_speed = max(min(left_speed, MAX_MOTOR_COMMAND), -MAX_MOTOR_COMMAND)
                 right_speed = max(min(right_speed, MAX_MOTOR_COMMAND), -MAX_MOTOR_COMMAND)
-                
-                # Set robot state to chase ball
-                robot_state = 1
             else:
                 # Increment consecutive no-ball frame counter
                 consecutive_no_ball_frames += 1
@@ -774,7 +830,7 @@ def status_monitoring_thread(update_rate=1):
                 serial_running = shared_state.serial_running
             
             # Log status information
-            state_dict = {0: "STOP", 1: "CHASE", 2: "RETURN"}
+            state_dict = {0: "STOP", 1: "CHASE", 2: "RETURN", 3: "BOOST"}
             state_name = state_dict.get(state, str(state))
             
             status = (
