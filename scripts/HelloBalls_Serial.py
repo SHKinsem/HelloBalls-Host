@@ -11,7 +11,7 @@ import threading
 import queue
 
 
-
+  
 class SerialComm:
     """
     Class to handle serial communication with MCU for the HelloBalls project.

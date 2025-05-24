@@ -528,26 +528,26 @@ def pid_thread(control_rate=50):
     """PID control thread - runs at fixed frequency"""
     log_message("INFO", "Starting PID control thread")
 
-    MOTOR_OUTPUT_SCALE = 10.0
-    MAX_MOTOR_COMMAND = 1500  # Max absolute value for a single motor command
+    MOTOR_OUTPUT_SCALE = 1.0
+    MAX_MOTOR_COMMAND = 3000  # Max absolute value for a single motor command
     
     # Initialize PID controllers
     # X controller (horizontal position) - for steering
     x_pid = PIDController(
-        kp=40,            # Proportional gain (reverted to original, for pre-scaled output)
-        ki=0.05,           # Integral gain (reverted to original, for pre-scaled output)
-        kd=10.0,            # Derivative gain (reverted to original, for pre-scaled output)
+        kp=500,            # Proportional gain (reverted to original, for pre-scaled output)
+        ki=10.0,           # Integral gain (reverted to original, for pre-scaled output)
+        kd=100.0,            # Derivative gain (reverted to original, for pre-scaled output)
         setpoint=0,         # Target is center of frame (will be converted to normalized coordinates)
-        output_limits=(-50, 50) # Pre-scale steering output (-50*10 = -500 to 50*10 = 500)
+        output_limits=(-1000, 1000) # Pre-scale steering output (-50*10 = -500 to 50*10 = 500)
     )
     
     # Y controller (vertical position) - for speed
     y_pid = PIDController(
-        kp=200,            # Proportional gain (reverted to original, for pre-scaled output)
-        ki=0.05,           # Integral gain (reverted to original, for pre-scaled output)
-        kd=0.1,            # Derivative gain (reverted to original, for pre-scaled output)
+        kp=3000,            # Proportional gain (reverted to original, for pre-scaled output)
+        ki=10.0,           # Integral gain (reverted to original, for pre-scaled output)
+        kd=100.0,            # Derivative gain (reverted to original, for pre-scaled output)
         setpoint=0.75,      # Target position is 75% down the frame (normalized 0-1)
-        output_limits=(0, 100) # Pre-scale speed output (0*10 = 0 to 100*10 = 1000)
+        output_limits=(-2000, 2000) # Pre-scale speed output (0*10 = 0 to 100*10 = 1000)
     )
     
     # Calculate control period
@@ -641,10 +641,10 @@ def pid_thread(control_rate=50):
                     
                 # Check if we're in boost mode and it hasn't expired
                 if pid_thread.boost_active:
-                    boost_duration = 1.0  # 1 second forward boost
+                    boost_duration = 8.0  # 1 second forward boost
                     if current_time - pid_thread.boost_start_time < boost_duration:
                         # Apply forward boost: equal power to both motors
-                        boost_speed = 1300  # High forward speed during boost
+                        boost_speed = 800  # High forward speed during boost
                         left_speed = boost_speed
                         right_speed = boost_speed
                         robot_state = 3  # Special state for boost mode
