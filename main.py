@@ -778,7 +778,7 @@ def serial_thread(port=None, message_rate=50):
             
             # Send command to MCU
             if serial_comm.connected:
-                success = serial_comm.send_command(state, left_speed, right_speed)
+                success = serial_comm.send_command(state, left_speed, right_speed, 0)
                 if not success:
                     log_message("WARNING", "Failed to send serial command")
                 else:
@@ -795,7 +795,7 @@ def serial_thread(port=None, message_rate=50):
     finally:
         # Ensure motors are stopped before exit
         if serial_comm.connected:
-            serial_comm.send_command(0, 0, 0)
+            serial_comm.send_command(0, 0, 0, 0)
             serial_comm.disconnect()
         
         # Update shared state

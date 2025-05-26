@@ -5,6 +5,7 @@ import sys
 import serial.tools.list_ports
 import os
 import termios
+import tty
 import fcntl
 import select
 import threading
@@ -176,30 +177,30 @@ class SerialComm:
         
         return self.connected
             
-    def send_command(self, state, motor_speed_1, motor_speed_2):
+    def send_command(self, state, motor_speed_1, motor_speed_2, tilt_angle=0):
         """
-        Send a command to the MCU in the format "state,motor_speed_1,motor_speed_2".
+        Send a command to the MCU in the format "state,motor_speed_1,motor_speed_2,tilt_angle".
         If auto_reconnect is enabled and the connection is lost, tries to reconnect.
         
         Args:
             state (int): State value (e.g., 0 for stop, 1 for run)
             motor_speed_1 (int): Speed value for motor 1
             motor_speed_2 (int): Speed value for motor 2
+            tilt_angle (int): Tilt angle value (default: 0)
             
         Returns:
             bool: True if command was sent successfully, False otherwise
         """
-        # Ensure connection is active
-        if not self.ensure_connection():
+        # Ensure connection is active (only check if not connected to avoid overhead)
+        if not self.connected and not self.ensure_connection():
             print("Not connected to serial port and reconnection failed")
             return False
             
         try:
-            # Format the command as "state,motor_speed_1,motor_speed_2"
-            command = f"{state},{motor_speed_1},{motor_speed_2}\n"
+            # Format the command as "state,motor_speed_1,motor_speed_2,tilt_angle"
+            command = f"{state},{motor_speed_1},{motor_speed_2},{tilt_angle}\n"
             self.ser.write(command.encode('ascii'))
-            # Flush to ensure immediate transmission
-            self.ser.flush()
+            # Remove flush() for non-blocking operation - let OS buffer handle transmission
             return True
         except Exception as e:
             print(f"Error sending command: {e}")
@@ -327,34 +328,94 @@ if __name__ == "__main__":
             print("Connected successfully. Starting test...")
             
             # Send some test commands
-            print("Sending stop command (0, 0, 0)")
-            serial_comm.send_command(0, 0, 0)
+            print("Sending stop command (0, 0, 0, 0)")
+            serial_comm.send_command(0, 0, 0, 0)
             time.sleep(0.1)  # Reduced sleep time
             
             # Choose mode
-            mode = input("Choose mode - [1] Send at 50Hz, [2] Receive status messages, [3] Both, [4] Keyboard controller: ")
+            mode = input("Choose mode - [1] Send at 50Hz, [2] Receive status messages, [3] Both, [4] Keyboard controller, [5] Debug mode: ")
             send_active = mode in ["1", "3"]
             receive_active = mode in ["2", "3"]
             keyboard_active = mode == "4"
+            debug_active = mode == "5"
             
             if keyboard_active:
                 print("\n--- Keyboard Controller Mode ---")
                 print("W: Forward    S: Backward")
                 print("A: Turn Left  D: Turn Right")
-                print("R: Toggle state between 1 and 2")
-                print("Space: Stop (state 0)")
+                print("0/1/2/3: Set robot state (State 3 allows tilt angle input)")
+                print("Space: Stop motors")
                 print("Q: Exit program")
+                print("\nNote: When selecting state 3, you'll be prompted to enter a tilt angle.")
+                print("The robot will continue using the previous state until tilt input is complete.")
+                print("The tilt angle will then be used for all movement commands in state 3.")
+                print("Other states (0, 1, 2) will use tilt angle 0.")
                 print("\nControls active. Current state: 1")
                 
                 # Initialize controller state
                 current_state = 1
                 wheel_speed = 800  # Default speed
+                current_tilt_angle = 0  # Track current tilt angle for state 3
                 last_command = None  # Track last command to avoid repeating
                 current_key = None  # Current active key
                 key_last_read_time = 0
                 key_timeout = 0.1  # Consider key released if no new input in 100ms
                 # Track key state separately from key input to maintain continuous movement
                 active_movement_key = None  # Key that 's actually controlling movement
+                
+                # Tilt angle input handling
+                waiting_for_tilt_input = False
+                tilt_input_queue = queue.Queue()
+                tilt_input_thread = None
+                previous_state = current_state  # Track previous state for state 3 transition
+                
+                def get_tilt_input_threaded(current_tilt, input_queue, old_settings):
+                    """Function to run in separate thread for tilt angle input"""
+                    try:
+                        # Temporarily restore terminal settings for input
+                        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                        
+                        # Force flush stdout and stderr to ensure prompt appears immediately
+                        sys.stdout.flush()
+                        sys.stderr.flush()
+                        
+                        print(f"\nEnter tilt angle for state 3 (current: {current_tilt}): ", end="", flush=True)
+                        
+                        # Read line directly from stdin with blocking mode
+                        import select
+                        
+                        # Make stdin blocking temporarily for this thread
+                        stdin_fd = sys.stdin.fileno()
+                        old_flags = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
+                        fcntl.fcntl(stdin_fd, fcntl.F_SETFL, old_flags & ~os.O_NONBLOCK)
+                        
+                        try:
+                            # Use readline() which should work better in threaded context
+                            tilt_input = sys.stdin.readline().strip()
+                        finally:
+                            # Restore non-blocking mode
+                            fcntl.fcntl(stdin_fd, fcntl.F_SETFL, old_flags)
+                        
+                        if tilt_input:
+                            try:
+                                new_tilt = int(tilt_input)
+                                input_queue.put(('success', new_tilt))
+                                print(f"Tilt angle set to: {new_tilt}")
+                            except ValueError:
+                                input_queue.put(('error', current_tilt))
+                                print(f"Invalid input, keeping current tilt angle: {current_tilt}")
+                        else:
+                            input_queue.put(('keep', current_tilt))
+                            print(f"Keeping current tilt angle: {current_tilt}")
+                            
+                    except (EOFError, KeyboardInterrupt):
+                        input_queue.put(('cancelled', current_tilt))
+                        print(f"Input cancelled, keeping current tilt angle: {current_tilt}")
+                    except Exception as e:
+                        input_queue.put(('error', current_tilt))
+                        print(f"Error getting input: {e}, keeping current tilt angle: {current_tilt}")
+                    
+                    print("Returning to keyboard control mode...")
                 
                 # Keyboard detection settings - increase frequency
                 keyboard_check_interval = 0.005  # 200Hz keyboard polling for better responsiveness
@@ -405,8 +466,12 @@ if __name__ == "__main__":
                                             current_key = key
                                             active_movement_key = key
                                             key_last_read_time = current_time
+                                        elif key in ['0', '1', '2', '3']:
+                                            # State keys - update current key only
+                                            current_key = key
+                                            key_last_read_time = current_time
                                         else:
-                                            # Non-movement keys like 'r'
+                                            # Other non-movement keys
                                             current_key = key
                                             key_last_read_time = current_time
                                 except IOError:
@@ -415,16 +480,15 @@ if __name__ == "__main__":
                             
                             # Auto-release key if no new input has been received for a while
                             # This only affects the current_key, not active_movement_key
-                            if current_key and current_key not in ['r'] and current_time - key_last_read_time > key_timeout:
+                            if current_key and current_key not in ['0', '1', '2', '3'] and current_time - key_last_read_time > key_timeout:
                                 # Only print key released message occasionally and only if we're actually changing movement
                                 if active_movement_key and current_time - last_output_time >= output_interval:
-                                    print("Key released - stopping movement")
+                                    # Update the same line without creating new lines
+                                    print(f"\r{' ' * 80}", end='')  # Clear the line first
+                                    print("\rKey released - stopping movement | Input: ", end='', flush=True)
                                     last_output_time = current_time
                                 current_key = None
                                 active_movement_key = None  # Stop movement when key is released
-                                # Send stop command when movement key is released
-                                serial_comm.send_command(0, 0, 0)
-                                last_command = (0, 0, 0)
                         
                         # Process serial communications at 50Hz 
                         # (decoupled from keyboard input for more responsive controls)
@@ -435,28 +499,77 @@ if __name__ == "__main__":
                             
                             # Process the current active key
                             command = None
-                            if current_key == 'r':
-                                # Toggle state between 1 and 2
-                                current_state = 2 if current_state == 1 else 1
-                                print(f"State toggled to: {current_state}")
-                                current_key = None  # Reset after toggle
-                            elif active_movement_key == ' ':  # Use active_movement_key for movement commands
-                                # Stop command (state 0)
-                                command = (0, 0, 0)
+                            if current_key in ['0', '1', '2', '3']:
+                                # State change keys
+                                new_state = int(current_key)
+                                if new_state != current_state:
+                                    previous_state = current_state  # Save current state before changing
+                                    current_state = new_state
+                                    print(f"State changed to: {current_state}")
+                                    
+                                    # Special handling for state 3 - prompt for tilt angle in separate thread
+                                    if current_state == 3 and not waiting_for_tilt_input:
+                                        waiting_for_tilt_input = True
+                                        print(f"Continuing with previous state ({previous_state}) while waiting for tilt input...")
+                                        # Start input thread to get tilt angle without blocking serial communication
+                                        tilt_input_thread = threading.Thread(
+                                            target=get_tilt_input_threaded,
+                                            args=(current_tilt_angle, tilt_input_queue, old_settings),
+                                            daemon=True
+                                        )
+                                        tilt_input_thread.start()
+                                        
+                                current_key = None  # Reset after state change
+                            
+                            # Check for tilt input completion (non-blocking)
+                            if waiting_for_tilt_input:
+                                try:
+                                    result_type, result_value = tilt_input_queue.get_nowait()
+                                    current_tilt_angle = result_value
+                                    waiting_for_tilt_input = False
+                                    print(f"Tilt input complete. Now using state {current_state} with tilt angle {current_tilt_angle}")
+                                    
+                                    # Restore raw mode for keyboard controls after input thread completes
+                                    tty_settings = termios.tcgetattr(sys.stdin)
+                                    tty_settings[3] = tty_settings[3] & ~(termios.ECHO | termios.ICANON)
+                                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, tty_settings)
+                                    fcntl.fcntl(sys.stdin, fcntl.F_SETFL, os.O_NONBLOCK)
+                                    
+                                except queue.Empty:
+                                    # No input ready yet, continue with normal operation
+                                    pass
+                            
+                            # Always send a command to maintain 50Hz communication
+                            # Determine which state and tilt angle to use
+                            if waiting_for_tilt_input and current_state == 3:
+                                # Use previous state while waiting for tilt input
+                                effective_state = previous_state
+                                tilt_angle = 0  # Use 0 tilt angle for previous state
+                            else:
+                                # Use current state
+                                effective_state = current_state
+                                tilt_angle = current_tilt_angle if current_state == 3 else 0
+                            
+                            if active_movement_key == ' ':  # Use active_movement_key for movement commands
+                                # Stop motors but keep current state
+                                command = (effective_state, 0, 0, tilt_angle)
                             elif active_movement_key == 'w':
                                 # Forward
-                                command = (current_state, wheel_speed, wheel_speed)
+                                command = (effective_state, wheel_speed, wheel_speed, tilt_angle)
                             elif active_movement_key == 'a':
                                 # Left turn
-                                command = (current_state, wheel_speed//2, -wheel_speed//2)
+                                command = (effective_state, wheel_speed//2, -wheel_speed//2, tilt_angle)
                             elif active_movement_key == 'd':
                                 # Right turn
-                                command = (current_state, -wheel_speed//2, wheel_speed//2)
+                                command = (effective_state, -wheel_speed//2, wheel_speed//2, tilt_angle)
                             elif active_movement_key == 's':
                                 # Backward
-                                command = (current_state, -wheel_speed, -wheel_speed)
+                                command = (effective_state, -wheel_speed, -wheel_speed, tilt_angle)
+                            else:
+                                # No movement key pressed - send 0 speed to maintain communication
+                                command = (effective_state, 0, 0, tilt_angle)
                             
-                            # Send command at 50Hz while key is held
+                            # Send command at 50Hz (always send to maintain communication)
                             if command:
                                 serial_comm.send_command(*command)
                                 
@@ -466,31 +579,144 @@ if __name__ == "__main__":
                                     last_output_time = current_time
                                     
                                     # Print the current command
-                                    action = "STOP" if command[0] == 0 else {
-                                        (current_state, wheel_speed, wheel_speed): "FORWARD",
-                                        (current_state, -wheel_speed, -wheel_speed): "BACKWARD",
-                                        (current_state, -wheel_speed, wheel_speed): "LEFT TURN",
-                                        (current_state, wheel_speed, -wheel_speed): "RIGHT TURN"
-                                    }.get(command, "CUSTOM")
+                                    if command[1] == 0 and command[2] == 0:
+                                        action = "STOP"
+                                    else:
+                                        action = {
+                                            (wheel_speed, wheel_speed): "FORWARD",
+                                            (-wheel_speed, -wheel_speed): "BACKWARD",
+                                            (wheel_speed//2, -wheel_speed//2): "LEFT TURN",
+                                            (-wheel_speed//2, wheel_speed//2): "RIGHT TURN"
+                                        }.get((command[1], command[2]), "CUSTOM")
                                     
-                                    print(f"Action: {action} | Command: state={command[0]}, m1={command[1]}, m2={command[2]}")
-                            
-                            # If receiving is enabled along with keyboard, do it at the same frequency as sending
-                            if receive_active:
-                                status = serial_comm.receive_status_message(timeout=0.001)  # Very short timeout
-                                if status and current_time - last_output_time >= output_interval:
-                                    print(f"Received status: State={status['state']}, "
-                                        f"Wheels=({status['wheel1_distance']:.2f},{status['wheel2_distance']:.2f}), "
-                                        f"IMU=({status['imu_x']:.2f},{status['imu_y']:.2f},{status['imu_z']:.2f}), "
-                                        f"Yaw={status['imu_yaw']:.2f}")
-                                    last_output_time = current_time
+                                    # Update the same line without creating new lines
+                                    print(f"\r{' ' * 120}", end='')  # Clear the line first
+                                    tilt_info = f" | Tilt: {command[3]}" if current_state == 3 and not waiting_for_tilt_input else ""
+                                    if waiting_for_tilt_input and current_state == 3:
+                                        input_status = f" | Using prev state ({previous_state}) - waiting for tilt input..."
+                                    else:
+                                        input_status = ""
+                                    print(f"\rAction: {action} | Command: state={command[0]}, m1={command[1]}, m2={command[2]}, tilt={command[3]}{tilt_info}{input_status} | Input: ", end='', flush=True)
+                        
+                        # If receiving is enabled along with keyboard, do it at the same frequency as sending
+                        if receive_active:
+                            status = serial_comm.receive_status_message(timeout=0.001)  # Very short timeout
+                            if status and current_time - last_output_time >= output_interval:
+                                # Update the same line without creating new lines
+                                print(f"\r{' ' * 120}", end='')  # Clear the line first
+                                print(f"\rReceived status: State={status['state']}, "
+                                    f"Wheels=({status['wheel1_distance']:.2f},{status['wheel2_distance']:.2f}), "
+                                    f"IMU=({status['imu_x']:.2f},{status['imu_y']:.2f},{status['imu_z']:.2f}), "
+                                    f"Yaw={status['imu_yaw']:.2f} | Input: ", end='', flush=True)
+                                last_output_time = current_time
                         
                         # Tiny sleep to prevent CPU hogging but maintain responsiveness
                         time.sleep(0.001)
                 
                 finally:
+                    # Clean up any running input thread
+                    if tilt_input_thread and tilt_input_thread.is_alive():
+                        # Give the thread a short time to finish
+                        tilt_input_thread.join(timeout=0.5)
+                    
                     # Restore terminal settings
                     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+                    # Print a newline to ensure terminal prompt appears on new line
+                    print()
+            elif debug_active:
+                print("\n--- Debug Mode ---")
+                print("Send custom messages at specified frequency")
+                print("Enter message in format 'state,motor1,motor2,tilt_angle' (e.g., '1,100,100,0')")
+                print("You can change the message during runtime by pressing Enter and typing a new one")
+                
+                # Get initial message and frequency
+                try:
+                    message_input = input("Enter initial message (default '0,0,0,0'): ").strip() or "0,0,0,0"
+                    parts = message_input.split(',')
+                    if len(parts) != 4:
+                        raise ValueError("Message must have exactly 4 comma-separated values")
+                    state, motor1, motor2, tilt_angle = map(int, parts)
+                    frequency = float(input("Enter frequency in Hz (default 50): ") or "50")
+                except ValueError as e:
+                    print(f"Invalid input ({e}), using defaults: 0,0,0,0 at 50Hz")
+                    state, motor1, motor2, tilt_angle, frequency = 0, 0, 0, 0, 50.0
+                
+                send_interval = 1.0 / frequency
+                print(f"\nSending messages: {state},{motor1},{motor2},{tilt_angle} at {frequency}Hz")
+                print("Press Enter to change message, Ctrl+C to exit")
+                
+                # Set stdin to non-blocking mode for runtime message changes
+                import fcntl
+                import os
+                old_flags = fcntl.fcntl(sys.stdin, fcntl.F_GETFL)
+                fcntl.fcntl(sys.stdin, fcntl.F_SETFL, old_flags | os.O_NONBLOCK)
+                
+                last_send_time = 0
+                message_count = 0
+                start_time = time.time()
+                last_status_time = 0
+                status_interval = 1.0  # Print status every second
+                
+                try:
+                    while True:
+                        current_time = time.time()
+                        
+                        # Check for user input to change message
+                        try:
+                            # Non-blocking read from stdin
+                            user_input = sys.stdin.readline().strip()
+                            if user_input:
+                                try:
+                                    parts = user_input.split(',')
+                                    if len(parts) == 4:
+                                        state, motor1, motor2, tilt_angle = map(int, parts)
+                                        print(f"Message changed to: {state},{motor1},{motor2},{tilt_angle}")
+                                    elif len(parts) == 1 and user_input.replace('.', '').isdigit():
+                                        # If single number, treat as frequency change
+                                        frequency = float(user_input)
+                                        send_interval = 1.0 / frequency
+                                        print(f"Frequency changed to: {frequency}Hz")
+                                    else:
+                                        print("Invalid format. Use 'state,motor1,motor2,tilt_angle' or just frequency number")
+                                except ValueError:
+                                    print("Invalid values. Use integers for message, float for frequency")
+                        except IOError:
+                            # No input available, continue
+                            pass
+                        
+                        # Send message at specified frequency
+                        if current_time - last_send_time >= send_interval:
+                            success = serial_comm.send_command(state, motor1, motor2, tilt_angle)
+                            if success:
+                                message_count += 1
+                            else:
+                                print("Failed to send message")
+                            
+                            last_send_time = current_time
+                        
+                        # Print status periodically
+                        if current_time - last_status_time >= status_interval:
+                            elapsed_time = current_time - start_time
+                            actual_frequency = message_count / elapsed_time if elapsed_time > 0 else 0
+                            # Update the same line without creating new lines
+                            print(f"\r{' ' * 120}", end='')  # Clear the line first
+                            print(f"\rSent {message_count} messages | "
+                                  f"Target: {frequency:.1f}Hz | "
+                                  f"Actual: {actual_frequency:.1f}Hz | "
+                                  f"Current: {state},{motor1},{motor2},{tilt_angle} | Input: ", end='', flush=True)
+                            last_status_time = current_time
+                        
+                        # Small sleep to prevent CPU hogging
+                        time.sleep(0.001)
+                        
+                except KeyboardInterrupt:
+                    elapsed_time = time.time() - start_time
+                    final_frequency = message_count / elapsed_time if elapsed_time > 0 else 0
+                    print(f"\n\nDebug mode stopped. Sent {message_count} messages in {elapsed_time:.2f}s")
+                    print(f"Average frequency: {final_frequency:.2f}Hz")
+                finally:
+                    # Restore stdin flags
+                    fcntl.fcntl(sys.stdin, fcntl.F_SETFL, old_flags)
             else:
                 print("Press Ctrl+C to exit")
                 
@@ -503,17 +729,19 @@ if __name__ == "__main__":
                     
                     # Send command at consistent 50Hz rate
                     if send_active and current_time - last_send_time >= send_interval:
-                        serial_comm.send_command(1, 100, 100)
+                        serial_comm.send_command(1, 100, 100, 0)
                         last_send_time = current_time
                     
                     # Receive and process status message if enabled (do this more frequently)
                     if receive_active:
                         status = serial_comm.receive_status_message(timeout=0.001)  # Very short timeout
                         if status:
-                            print(f"Received status: State={status['state']}, "
+                            # Update the same line without creating new lines
+                            print(f"\r{' ' * 120}", end='')  # Clear the line first
+                            print(f"\rReceived status: State={status['state']}, "
                                 f"Wheels=({status['wheel1_distance']:.2f},{status['wheel2_distance']:.2f}), "
                                 f"IMU=({status['imu_x']:.2f},{status['imu_y']:.2f},{status['imu_z']:.2f}), "
-                                f"Yaw={status['imu_yaw']:.2f}")
+                                f"Yaw={status['imu_yaw']:.2f} | Input: ", end='', flush=True)
                     
                     # Small sleep to prevent CPU hogging
                     time.sleep(0.001)
@@ -523,6 +751,6 @@ if __name__ == "__main__":
     finally:
         # Always disconnect properly
         print("Sending stop command before exit")
-        serial_comm.send_command(0, 0, 0)
+        serial_comm.send_command(0, 0, 0, 0)
         serial_comm.disconnect()
         print("Test completed")
