@@ -641,10 +641,10 @@ def pid_thread(control_rate=50):
                     
                 # Check if we're in boost mode and it hasn't expired
                 if pid_thread.boost_active:
-                    boost_duration = 8.0  # 1 second forward boost
+                    boost_duration = 1.0  # 1 second forward boost
                     if current_time - pid_thread.boost_start_time < boost_duration:
                         # Apply forward boost: equal power to both motors
-                        boost_speed = 800  # High forward speed during boost
+                        boost_speed = 0  # High forward speed during boost
                         left_speed = boost_speed
                         right_speed = boost_speed
                         robot_state = 3  # Special state for boost mode
