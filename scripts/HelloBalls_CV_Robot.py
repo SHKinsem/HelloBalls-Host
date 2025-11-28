@@ -20,7 +20,7 @@ build_dir = os.path.join(parent_dir, "build")
 sys.path.append(build_dir)
 
 # Import our modules
-from HelloBalls_Serial import SerialComm
+from scripts.HelloBalls_Serial_tmp import SerialComm
 
 # Try to import the YOLO API module
 try:

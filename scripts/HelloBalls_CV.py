@@ -11,7 +11,7 @@ import glob
 import argparse
 import subprocess
 # Import serial communication
-from HelloBalls_Serial import SerialComm
+from HelloBalls_Serial_2 import SerialComm
 
 # Import path handling to find the YOLO API module
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -45,7 +45,8 @@ ROBOT_STATE_STOP = 0
 ROBOT_STATE_CHASE_BALL = 1
 ROBOT_STATE_RETURN_HOME = 2
 ROBOT_STATE_DELIVER_BALL = 3
-ROBOT_STATE_NAMES = ["STOP", "CHASE_BALL", "RETURN_HOME", "DELIVER_BALL"]
+ROBOT_STATE_SEARCH = 4
+ROBOT_STATE_NAMES = ["STOP", "CHASE_BALL", "RETURN_HOME", "DELIVER_BALL", "SEARCH"]
 
 # Ball selection algorithms
 BALL_SELECTION_BOTTOM_EDGE = 0  # Select ball with lowest bottom edge (closest to robot)
@@ -136,7 +137,7 @@ class PIDController:
 class HelloBallsCV:
     """Main CV class for the HelloBalls robot"""
 
-    def __init__(self, show_preview=True, detection_mode=MODE_BALL_DETECTION, serial_port='/dev/ttyS1'):
+    def __init__(self, show_preview=True, detection_mode=MODE_BALL_DETECTION, serial_port=None):
         """Initialize the CV system"""
         self.show_preview = show_preview
         self.detection_mode = detection_mode
@@ -160,9 +161,7 @@ class HelloBallsCV:
         self.is720p = True
 
         # Console output configuration
-        self.print_fps_to_console = not show_preview
-
-        # Robot control
+        self.print_fps_to_console = not show_preview        # Robot control
         self.robot_state = ROBOT_STATE_STOP
         self.serial_comm = SerialComm(port=self.serial_port, auto_reconnect=True, timeout=0.01)
         # Create separate PID controllers for X and Y like main.py
@@ -170,6 +169,22 @@ class HelloBallsCV:
                                    setpoint=0)  # Steering control - target center
         self.y_pid = PIDController(kp=3000, ki=10.0, kd=100.0, max_output=2000,
                                    setpoint=0.75)  # Speed control - target 75% down
+
+        # Tilt angle control for search mode
+        self.tilt_angle = 0  # Current tilt angle (0-35 degrees)
+        self.min_tilt_angle = -5
+        self.max_tilt_angle = 35
+
+        # Search mode speed control
+        self.search_left_speed = 0   # Left motor speed in search mode
+        self.search_right_speed = 0  # Right motor speed in search mode
+        self.search_turn_speed = 100 # Low speed for turning in search mode
+        
+        # Person centering control in search mode
+        self.auto_person_centering = False  # Flag to enable automatic person centering
+        self.person_centering_base_speed = 120  # Base speed for person centering turns
+        self.manual_override_time = 0       # Time when manual control was last used
+        self.manual_override_duration = 3.0 # Seconds to wait before re-enabling auto centering
 
         # Motor output scaling
         self.motor_output_scale = 1.0
@@ -245,9 +260,11 @@ class HelloBallsCV:
             print(f"Error initializing model: {e}")
             return False
 
-        # Initialize serial communication
+        # Initialize serial communication (auto-detect if port is None)
+        print(f"Available serial ports: {SerialComm.list_available_ports()}")
         if not self.serial_comm.connect():
             print("Warning: Failed to connect to robot. CV will work without robot control.")
+            print("Tip: If your robot is connected on a different device, try running with --serial-port /dev/ttyUSB0 or similar.")
 
         # Setup preview window if enabled
         if self.show_preview:
@@ -274,9 +291,8 @@ class HelloBallsCV:
 
             if window_h > screen_h * 0.8:
                 window_h = int(screen_h * 0.8)
-                window_w = int(window_h * actual_width / actual_height)
-
-            cv2.resizeWindow(self.window_name, window_w, window_h)
+                window_w = int(window_h * actual_width / actual_height)            
+                cv2.resizeWindow(self.window_name, window_w, window_h)
 
             win_x = (screen_w - window_w) // 2
             win_y = (screen_h - window_h) // 2
@@ -285,7 +301,8 @@ class HelloBallsCV:
             print(f"Preview window initialized at ({win_x}, {win_y}) with size {window_w}x{window_h}")
             print("Press 'q' to quit, 'r' to toggle resolution, 'f' to toggle fullscreen, "
                   "'m' to switch detection mode, 'b' to switch ball selection algorithm, 'p' to toggle preview")
-            print("Robot control: '0' STOP, '1' CHASE_BALL, '2' RETURN_HOME, '3' DELIVER_BALL")
+            print("Robot control: '0' STOP, '1' CHASE_BALL, '2' RETURN_HOME, '3' DELIVER_BALL, '4' SEARCH")
+            print("Search mode: 'w' tilt up, 's' tilt down")
 
         return True
 
@@ -316,29 +333,33 @@ class HelloBallsCV:
         if not self.camera or not self.camera.isOpened():
             return self.is720p
 
-        # Set properties that affect switching delay
+        # Store current camera settings to preserve state
+        original_buffersize = self.camera.get(cv2.CAP_PROP_BUFFERSIZE)
+        
+        # Temporarily set buffer size for smoother transition
         self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if self.is720p:
             # Switch to 712p
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 712)
-
-            # Flush the buffer
-            for _ in range(2):
-                self.camera.grab()
-
             print("\r\nResolution changed to 1280x712")
         else:
             # Switch to 720p
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-            # Flush the buffer
-            for _ in range(2):
-                self.camera.grab()
-
             print("\r\nResolution changed to 1280x720")
+
+        # Gentle buffer flush - only one frame to avoid state disruption
+        try:
+            ret, _ = self.camera.read()
+            if not ret:
+                print("Warning: Could not read frame after resolution change")
+        except Exception as e:
+            print(f"Warning: Error reading frame after resolution change: {e}")
+
+        # Restore original buffer size to maintain camera stability
+        self.camera.set(cv2.CAP_PROP_BUFFERSIZE, original_buffersize)
 
         # Get actual resolution
         actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -437,7 +458,16 @@ class HelloBallsCV:
         self.best_target = None
         self.x_pid.reset()  # Reset both PID controllers when switching modes
         self.y_pid.reset()
-        print(f"\r\nSwitched to {MODE_NAMES[self.detection_mode]} mode")
+        self.person_centering_pid.reset()  # Reset person centering PID as well
+        
+        # Enable automatic person centering when switching to person detection in SEARCH mode
+        if self.detection_mode == MODE_PERSON_DETECTION and self.robot_state == ROBOT_STATE_SEARCH:
+            self.auto_person_centering = True
+            print(f"\r\nSwitched to {MODE_NAMES[self.detection_mode]} mode - Automatic person centering ENABLED")
+        else:
+            self.auto_person_centering = False
+            print(f"\r\nSwitched to {MODE_NAMES[self.detection_mode]} mode")
+        
         return self.detection_mode
 
     def switch_ball_selection_mode(self):
@@ -446,93 +476,101 @@ class HelloBallsCV:
         print(f"\r\nSwitched to {BALL_SELECTION_MODES[self.ball_selection_mode]} algorithm")
         return self.ball_selection_mode
 
-    def process_frame(self):
-        """Process a single frame"""
-        if not self.camera or not self.camera.isOpened():
-            return False, None
 
-        # Capture frame
-        ret, frame = self.camera.read()
-        if not ret or frame is None:
-            print("Error: Failed to capture frame")
-            return False, None
+    # def process_frame(self):
+    #     """Process a single frame"""
 
-        # Get frame dimensions
-        height, width = frame.shape[:2]
+    #     print("ffffffffffffffffffffframe")
+    #     if not self.camera or not self.camera.isOpened():
+    #         return False, None
 
-        # Preprocess the frame
-        preprocessed_frame, x_scale, y_scale, x_shift, y_shift = self.preprocess_image_letterbox(frame)
+    #     print("frameeeeeeeeeeeee")
 
-        # Run detection
-        detection_results = yolo11_api.inference(preprocessed_frame)
+    #     # Capture frame
+    #     ret, frame = self.camera.read()
+    #     print(ret)
+    #     if not ret or frame is None:
+    #         print("Error: Failed to capture frame")
+    #         return False, None
 
-        # Reset detection results
-        self.detected_objects = []
-        self.best_target = None
-        closest_to_center_distance = float('inf')
+    #     # Get frame dimensions
+    #     height, width = frame.shape[:2]
 
-        # Process detection results
-        if detection_results and len(detection_results.class_ids) > 0:
-            for cls_id, boxes, confs in zip(detection_results.class_ids,
-                                            detection_results.bboxes,
-                                            detection_results.scores):
+    #     # Preprocess the frame
+    #     preprocessed_frame, x_scale, y_scale, x_shift, y_shift = self.preprocess_image_letterbox(frame)
 
-                if confs < CONFIDENCE_THRESHOLD:
-                    continue
+    #     # Run detection
+    #     detection_results = yolo11_api.inference(preprocessed_frame)
 
-                # Convert bounding box to original frame coordinates
-                x = (boxes[0] - x_shift) / x_scale
-                y = (boxes[1] - y_shift) / y_scale
-                w = boxes[2] / x_scale
-                h = boxes[3] / y_scale
+    #     # Reset detection results
+    #     self.detected_objects = []
+    #     self.best_target = None
+    #     closest_to_center_distance = float('inf')
 
-                # Store all detections
-                self.detected_objects.append({
-                    'class_id': cls_id,
-                    'x': x,
-                    'y': y,
-                    'width': w,
-                    'height': h,
-                    'confidence': confs
-                })
+    #     # Process detection results
+    #     if detection_results and len(detection_results.class_ids) > 0:
+    #         for cls_id, boxes, confs in zip(detection_results.class_ids,
+    #                                         detection_results.bboxes,
+    #                                         detection_results.scores):
 
-                # Only process target objects for the current mode
-                if ((self.detection_mode == MODE_BALL_DETECTION and cls_id == SPORTS_BALL_CLASS) or
-                        (self.detection_mode == MODE_PERSON_DETECTION and cls_id == PERSON_CLASS)):
+    #             if confs < CONFIDENCE_THRESHOLD:
+    #                 continue
 
-                    # Ball selection algorithms
-                    if self.ball_selection_mode == BALL_SELECTION_BOTTOM_EDGE:
-                        ball_bottom_y = y + h
+    #             # Convert bounding box to original frame coordinates
+    #             x = (boxes[0] - x_shift) / x_scale
+    #             y = (boxes[1] - y_shift) / y_scale
+    #             w = boxes[2] / x_scale
+    #             h = boxes[3] / y_scale
 
-                        if self.best_target is None or ball_bottom_y > closest_to_center_distance:
-                            closest_to_center_distance = ball_bottom_y
-                            self.best_target = (cls_id, x, y, w, h, confs)
+    #             # Store all detections
+    #             self.detected_objects.append({
+    #                 'class_id': cls_id,
+    #                 'x': x,
+    #                 'y': y,
+    #                 'width': w,
+    #                 'height': h,
+    #                 'confidence': confs
+    #             })
 
-                    elif self.ball_selection_mode == BALL_SELECTION_CENTER_PROXIMITY:
-                        ball_center_x = x + w / 2
-                        distance_to_center = abs(ball_center_x - width / 2)
+    #             #modify: print bbox , confs
+    #             #print(f"[BBOX] Class:{cls_id},x:{x:.1f},y:{y:.1f},w:{w:.1f},h:{h:.1f},confidence::{confs:.2f}")
+    #             #Only process target objects for the current mode
+    #             if ((self.detection_mode == MODE_BALL_DETECTION and cls_id == SPORTS_BALL_CLASS) or
+    #                     (self.detection_mode == MODE_PERSON_DETECTION and cls_id == PERSON_CLASS)):
 
-                        if self.best_target is None or distance_to_center < closest_to_center_distance:
-                            closest_to_center_distance = distance_to_center
-                            self.best_target = (cls_id, x, y, w, h, confs)
+    #                 # Ball selection algorithms
+    #                 if self.ball_selection_mode == BALL_SELECTION_BOTTOM_EDGE:
+    #                     ball_bottom_y = y + h
 
-        # Update detection confidence
-        if self.best_target:
-            self.detection_confidence = self.best_target[5]
-        else:
-            self.detection_confidence = 0
+    #                     if self.best_target is None or ball_bottom_y > closest_to_center_distance:
+    #                         closest_to_center_distance = ball_bottom_y
+    #                         self.best_target = (cls_id, x, y, w, h, confs)
 
-        # Control robot based on current state and detections
-        self.control_robot()
+    #                 elif self.ball_selection_mode == BALL_SELECTION_CENTER_PROXIMITY:
+    #                     ball_center_x = x + w / 2
+    #                     distance_to_center = abs(ball_center_x - width / 2)
 
-        # Update FPS counter
-        fps = self.fps_counter.update(print_to_console=self.print_fps_to_console)
+    #                     if self.best_target is None or distance_to_center < closest_to_center_distance:
+    #                         closest_to_center_distance = distance_to_center
+    #                         self.best_target = (cls_id, x, y, w, h, confs)
 
-        # Draw UI if preview is enabled
-        if self.show_preview:
-            frame = self.draw_ui(frame)
+    #     # Update detection confidence
+    #     if self.best_target:
+    #         self.detection_confidence = self.best_target[5]
+    #     else:
+    #         self.detection_confidence = 0
 
-        return True, frame
+    #     # Control robot based on current state and detections
+    #     self.control_robot()
+
+    #     # Update FPS counter
+    #     fps = self.fps_counter.update(print_to_console=self.print_fps_to_console)
+
+    #     # Draw UI if preview is enabled
+    #     if self.show_preview:
+    #         frame = self.draw_ui(frame)
+
+    #     return True, frame
 
     def draw_ui(self, frame):
         """Draw UI elements on the frame"""
@@ -642,13 +680,37 @@ class HelloBallsCV:
 
                 # Draw error line
                 cv2.line(frame, (int(person_center_x), int(person_center_y)),
-                         (int(frame_center_x), int(person_center_y)), (0, 255, 255), 2)
-
-                # Show centering status
+                         (int(frame_center_x), int(person_center_y)), (0, 255, 255), 2)                # Show centering status
                 error_x = person_center_x - frame_center_x
                 if abs(error_x) < 30:
                     cv2.putText(frame, "CENTERED", (int(frame_center_x - 50), 50),
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+                
+                # Show automatic person centering status in SEARCH mode
+                if self.robot_state == ROBOT_STATE_SEARCH and self.auto_person_centering:
+                    # Check if manual override is active
+                    current_time = time.time()
+                    manual_override_active = (self.manual_override_time > 0 and 
+                                            current_time - self.manual_override_time < self.manual_override_duration)
+                    
+                    if manual_override_active:
+                        status_text = "MANUAL OVERRIDE"
+                        status_color = (0, 165, 255)  # Orange for manual override
+                        remaining_time = self.manual_override_duration - (current_time - self.manual_override_time)
+                        cv2.putText(frame, status_text, (20, 155),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+                        cv2.putText(frame, f"Auto in {remaining_time:.1f}s", (20, 185),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
+                    else:
+                        status_text = "AUTO-CENTERING"
+                        status_color = (0, 255, 255)  # Yellow for active auto-centering
+                        cv2.putText(frame, status_text, (20, 155),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+                        
+                        # Show error value
+                        error_text = f"Error: {int(error_x)}px"
+                        cv2.putText(frame, error_text, (20, 185),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
 
         return frame
 
@@ -663,18 +725,35 @@ class HelloBallsCV:
         print("  'm' - Switch detection mode (Ball/Person)")
         print("  'b' - Switch ball selection algorithm")
         print("  'p' - Toggle preview window on/off")
-        print("  'i' - Show detailed system information")
         print("  'h' - Show this help message")
         print("  '0' - Robot STOP state")
         print("  '1' - Robot CHASE_BALL state")
         print("  '2' - Robot RETURN_HOME state")
         print("  '3' - Robot DELIVER_BALL state")
-        print("  's' - Switch camera")
+        print("  '4' - Robot SEARCH state")
+        print("  'i' - Tilt camera up (SEARCH mode only)")
+        print("  'k' - Tilt camera down (SEARCH mode only)")
+        print("  'w' - Move forward (SEARCH mode only)")
+        print("  's' - Move backward (SEARCH mode only)")
+        print("  'a' - Turn left (SEARCH mode only)")
+        print("  'd' - Turn right (SEARCH mode only)")
+        print("  'space' - Stop movement (SEARCH mode only)")
+        print("")
+        print("SEARCH Mode Features:")
+        print("  • Manual movement controls ('w'/'s'/'a'/'d')")
+        print("  • Camera tilt control ('i'/'k')")
+        print("  • Auto person centering (press 'm' for person mode)")
         print("=" * 50)
         print(f"Current mode: {MODE_NAMES[self.detection_mode]}")
         print(f"Ball selection: {BALL_SELECTION_MODES[self.ball_selection_mode]}")
         print(f"Preview: {'On' if self.show_preview else 'Off'}")
         print(f"FPS: {self.fps_counter.fps:.1f}")
+        if self.robot_state == ROBOT_STATE_SEARCH:
+            print(f"Tilt angle: {self.tilt_angle}° (range: {self.min_tilt_angle}-{self.max_tilt_angle}°)")
+            if self.auto_person_centering:
+                print(f"Auto person centering: ENABLED")
+            else:
+                print(f"Auto person centering: DISABLED")
         print("=" * 50)
 
     def show_system_info(self):
@@ -829,52 +908,125 @@ class HelloBallsCV:
             self.toggle_preview()
         elif key == 'h' or key == 'H':
             self.show_help()
-        elif key == 'i' or key == 'I':
-            self.show_system_info()
         # Robot control commands
-        elif key in ['0', '1', '2', '3']:
+        elif key in ['0', '1', '2', '3', '4']:
             state = int(key)
             self.robot_state = state
-            state_names = ["STOP", "CHASE_BALL", "RETURN_HOME", "DELIVER_BALL"]
+            state_names = ["STOP", "CHASE_BALL", "RETURN_HOME", "DELIVER_BALL", "SEARCH"]
             print(f"\nRobot state set to {state_names[state]}")
             # Reset PID controllers when changing states
             self.x_pid.reset()
             self.y_pid.reset()
             # Reset boost state when changing states
             self.boost_active = False
+            # Reset search mode speeds when entering any state
+            self.search_left_speed = 0
+            self.search_right_speed = 0
+            
+            # Handle automatic person centering state
+            if state == ROBOT_STATE_SEARCH:
+                # Enable auto person centering if in person detection mode
+                if self.detection_mode == MODE_PERSON_DETECTION:
+                    self.auto_person_centering = True
+                    print(f"SEARCH mode activated - Automatic person centering enabled")
+                else:
+                    self.auto_person_centering = False
+            else:
+                # Disable auto person centering when leaving SEARCH mode
+                self.auto_person_centering = False
+            
             # Immediately send command to trigger connection (this will trigger auto-reconnect if needed)
-            self.serial_comm.send_command(self.robot_state, 0, 0, 0)
+            if state == ROBOT_STATE_SEARCH:
+                self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+            else:
+                self.serial_comm.send_command(self.robot_state, 0, 0, 0)
+        # Tilt control for search mode
+        elif key == 'i' or key == 'I':
+            if self.robot_state == ROBOT_STATE_SEARCH:
+                if self.tilt_angle < self.max_tilt_angle:
+                    self.tilt_angle += 3
+                    print(f"\nTilt angle increased to {self.tilt_angle}°")
+                    self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+                else:
+                    print(f"\nTilt angle already at maximum ({self.max_tilt_angle}°)")
+            else:
+                print(f"\nTilt control only available in SEARCH mode (current mode: {ROBOT_STATE_NAMES[self.robot_state]})")
+        elif key == 'k' or key == 'K':
+            if self.robot_state == ROBOT_STATE_SEARCH:
+                if self.tilt_angle > self.min_tilt_angle:
+                    self.tilt_angle -= 3
+                    print(f"\nTilt angle decreased to {self.tilt_angle}°")
+                    self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+                else:
+                    print(f"\nTilt angle already at minimum ({self.min_tilt_angle}°)")
+            else:
+                print(f"\nTilt control only available in SEARCH mode (current mode: {ROBOT_STATE_NAMES[self.robot_state]})")
+        # Forward and backward movement for search mode
+        elif key == 'w' or key == 'W':
+            if self.robot_state == ROBOT_STATE_SEARCH:
+                # Move forward: both motors forward
+                self.search_left_speed = self.search_turn_speed
+                self.search_right_speed = self.search_turn_speed
+                print(f"\nMoving forward (speed: {self.search_turn_speed})")
+                self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+            else:
+                print(f"\nMovement control only available in SEARCH mode (current mode: {ROBOT_STATE_NAMES[self.robot_state]})")
         elif key == 's' or key == 'S':
-            print("\nCamera switch requested")
-            if self.robot_command_callback:
-                self.robot_command_callback('camera_switch', None)
+            if self.robot_state == ROBOT_STATE_SEARCH:
+                # Move backward: both motors reverse
+                self.search_left_speed = -self.search_turn_speed
+                self.search_right_speed = -self.search_turn_speed
+                print(f"\nMoving backward (speed: {self.search_turn_speed})")
+                self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+            else:
+                print(f"\nMovement control only available in SEARCH mode (current mode: {ROBOT_STATE_NAMES[self.robot_state]})")
+        # Turning control for search mode
+        elif key == 'a' or key == 'A':
+            if self.robot_state == ROBOT_STATE_SEARCH:
+                # Turn left: left motor forward, right motor slower/reverse
+                self.search_left_speed = -self.search_turn_speed
+                self.search_right_speed = self.search_turn_speed
+                
+                # Temporarily disable auto person centering when manual control is used
+                if self.auto_person_centering:
+                    self.manual_override_time = time.time()
+                    print(f"\nTurning left (speed: {self.search_turn_speed}) - Manual override active")
+                else:
+                    print(f"\nTurning left (speed: {self.search_turn_speed})")
+                    
+                self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+            else:
+                print(f"\nTurn control only available in SEARCH mode (current mode: {ROBOT_STATE_NAMES[self.robot_state]})")
+        elif key == 'd' or key == 'D':
+            if self.robot_state == ROBOT_STATE_SEARCH:
+                # Turn right: left motor slower/reverse, right motor forward
+                self.search_left_speed = self.search_turn_speed
+                self.search_right_speed = -self.search_turn_speed
+                
+                # Temporarily disable auto person centering when manual control is used
+                if self.auto_person_centering:
+                    self.manual_override_time = time.time()
+                    print(f"\nTurning right (speed: {self.search_turn_speed}) - Manual override active")
+                else:
+                    print(f"\nTurning right (speed: {self.search_turn_speed})")
+                    
+                self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+            else:
+                print(f"\nTurn control only available in SEARCH mode (current mode: {ROBOT_STATE_NAMES[self.robot_state]})")
+        elif key == ' ':  # Spacebar to stop movement in search mode
+            if self.robot_state == ROBOT_STATE_SEARCH:
+                self.search_left_speed = 0
+                self.search_right_speed = 0
+                
+                # Reset manual override timer when explicitly stopping
+                self.manual_override_time = 0
+                
+                print(f"\nStopped movement")
+                self.serial_comm.send_command(self.robot_state, self.search_left_speed, self.search_right_speed, self.tilt_angle)
+            else:
+                print(f"\nMovement control only available in SEARCH mode (current mode: {ROBOT_STATE_NAMES[self.robot_state]})")
 
         return True
-
-    def show_help(self):
-        """Display help information"""
-        print("\n" + "=" * 50)
-        print("HelloBalls CV System - Keyboard Controls")
-        print("=" * 50)
-        print("  'q' - Quit the application")
-        print("  'r' - Toggle camera resolution (720p/712p)")
-        print("  'f' - Toggle fullscreen mode (preview window)")
-        print("  'm' - Switch detection mode (Ball/Person)")
-        print("  'b' - Switch ball selection algorithm")
-        print("  'p' - Toggle preview window on/off")
-        print("  'i' - Show detailed system information")
-        print("  'h' - Show this help message")
-        print("  '0' - Robot STOP state")
-        print("  '1' - Robot CHASE_BALL state")
-        print("  '2' - Robot RETURN_HOME state")
-        print("  '3' - Robot DELIVER_BALL state")
-        print("  's' - Switch camera")
-        print("=" * 50)
-        print(f"Current mode: {MODE_NAMES[self.detection_mode]}")
-        print(f"Ball selection: {BALL_SELECTION_MODES[self.ball_selection_mode]}")
-        print(f"Preview: {'On' if self.show_preview else 'Off'}")
-        print(f"FPS: {self.fps_counter.fps:.1f}")
-        print("=" * 50)
 
     def initialize(self):
         """Initialize the CV system (camera and model)
@@ -990,29 +1142,33 @@ class HelloBallsCV:
         if not self.camera or not self.camera.isOpened():
             return self.is720p
 
-        # Set properties that affect switching delay
+        # Store current camera settings to preserve state
+        original_buffersize = self.camera.get(cv2.CAP_PROP_BUFFERSIZE)
+        
+        # Temporarily set buffer size for smoother transition
         self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if self.is720p:
             # Switch to 712p
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 712)
-
-            # Flush the buffer
-            for _ in range(2):
-                self.camera.grab()
-
             print("\r\nResolution changed to 1280x712")
         else:
             # Switch to 720p
             self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
             self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-            # Flush the buffer
-            for _ in range(2):
-                self.camera.grab()
-
             print("\r\nResolution changed to 1280x720")
+
+        # Gentle buffer flush - only one frame to avoid state disruption
+        try:
+            ret, _ = self.camera.read()
+            if not ret:
+                print("Warning: Could not read frame after resolution change")
+        except Exception as e:
+            print(f"Warning: Error reading frame after resolution change: {e}")
+
+        # Restore original buffer size to maintain camera stability
+        self.camera.set(cv2.CAP_PROP_BUFFERSIZE, original_buffersize)
 
         # Get actual resolution
         actual_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
@@ -1117,7 +1273,18 @@ class HelloBallsCV:
         self.detected_objects = []
         self.best_target = None
 
-        print(f"\r\nSwitched to {MODE_NAMES[self.detection_mode]} mode")
+        # Reset PID controllers when switching detection modes to ensure clean state
+        self.x_pid.reset()
+        self.y_pid.reset()
+
+        # Enable automatic person centering when switching to person detection in SEARCH mode
+        if self.detection_mode == MODE_PERSON_DETECTION and self.robot_state == ROBOT_STATE_SEARCH:
+            self.auto_person_centering = True
+            print(f"\r\nSwitched to {MODE_NAMES[self.detection_mode]} mode - Automatic person centering ENABLED")
+        else:
+            self.auto_person_centering = False
+            print(f"\r\nSwitched to {MODE_NAMES[self.detection_mode]} mode")
+
         return self.detection_mode
 
     def switch_ball_selection_mode(self):
@@ -1130,12 +1297,15 @@ class HelloBallsCV:
         print(f"\r\nSwitched to {BALL_SELECTION_MODES[self.ball_selection_mode]} algorithm")
         return self.ball_selection_mode
 
+    
     def process_frame(self):
         """Process a single frame
 
         Returns:
             tuple: (success, frame with annotations)
         """
+        
+     
         if not self.camera or not self.camera.isOpened():
             return False, None
 
@@ -1184,7 +1354,8 @@ class HelloBallsCV:
                     'height': h,
                     'confidence': confs
                 })
-
+                #modify:print bbox & conf level
+                #print(f"[BBOX] Class:{cls_id},x:{x:.1f},y:{y:.1f},w:{w:.1f},h:{h:.1f},confidence::{confs:.2f}")
                 # Only process target objects for the current mode
                 if ((self.detection_mode == MODE_BALL_DETECTION and cls_id == SPORTS_BALL_CLASS) or
                         (self.detection_mode == MODE_PERSON_DETECTION and cls_id == PERSON_CLASS)):
@@ -1224,6 +1395,7 @@ class HelloBallsCV:
             frame = self.draw_ui(frame)
 
         return True, frame
+        
 
     def draw_ui(self, frame):
         """Draw UI elements on the frame
@@ -1525,51 +1697,33 @@ class HelloBallsCV:
 
                     # Special "forward boost" mode when ball is centered
                     if ball_centered and not self.boost_active:
-                        # Start boost mode
-                        print("Ball centered! Activating forward boost")
+                        # Start boost mode - pure sprint towards ball
+                        print("Ball centered! Activating forward boost sprint")
                         self.boost_start_time = current_time
                         self.boost_active = True
 
                     # Check if we're in boost mode and it hasn't expired
                     if self.boost_active:
-                        boost_duration = 1.0  # 1 second forward boost
+                        boost_duration = 3.0  # 8 second forward boost sprint - extended for reliable reach
                         if current_time - self.boost_start_time < boost_duration:
-                            # Apply forward boost: equal power to both motors
-                            boost_speed = 2000  # High forward speed during boost
+                            # Apply forward boost: high speed sprint towards ball
+                            boost_speed = 1500  # Even higher forward speed during boost
                             left_speed = boost_speed
                             right_speed = boost_speed
-                            print(f"Forward boost active: {current_time - self.boost_start_time:.2f}s")
+                            print(f"Forward boost sprint: {current_time - self.boost_start_time:.2f}s / {boost_duration}s")
                         else:
-                            # Boost duration expired, return to normal control
+                            # Boost duration expired, return to normal PID control
                             self.boost_active = False
-                            print("Forward boost completed")
+                            print(f"Forward boost sprint completed after {boost_duration}s - returning to PID control")
 
-                            # Reset PID controllers after boost
-                            self.x_pid.reset()
-                            self.y_pid.reset()
-
-                            # Calculate normal PID outputs
-                            steering = self.x_pid.compute(normalized_x)  # Output: -1000 to 1000
-                            base_speed = self.y_pid.compute(normalized_y)  # Output: -2000 to 2000
-
-                            # Combine components with scaling like main.py
-                            scaled_left_speed = (base_speed + steering) * self.motor_output_scale
-                            scaled_right_speed = (base_speed - steering) * self.motor_output_scale
-
-                            left_speed = int(scaled_left_speed)
-                            right_speed = int(scaled_right_speed)
-
-                            # Limit motor speeds to max command values
-                            left_speed = max(min(left_speed, self.max_motor_command), -self.max_motor_command)
-                            right_speed = max(min(right_speed, self.max_motor_command), -self.max_motor_command)
-                    else:
-                        # Normal PID control when not in boost mode
+                    # Normal PID control when not in boost mode
+                    if not self.boost_active:
                         steering = self.x_pid.compute(normalized_x)  # Output: -1000 to 1000
                         base_speed = self.y_pid.compute(normalized_y)  # Output: -2000 to 2000
 
                         # Combine components with scaling like main.py
-                        scaled_left_speed = (base_speed + steering) * self.motor_output_scale
-                        scaled_right_speed = (base_speed - steering) * self.motor_output_scale
+                        scaled_left_speed = (base_speed - steering) * self.motor_output_scale
+                        scaled_right_speed = (base_speed + steering) * self.motor_output_scale
 
                         left_speed = int(scaled_left_speed)
                         right_speed = int(scaled_right_speed)
@@ -1577,11 +1731,19 @@ class HelloBallsCV:
                         # Limit motor speeds to max command values
                         left_speed = max(min(left_speed, self.max_motor_command), -self.max_motor_command)
                         right_speed = max(min(right_speed, self.max_motor_command), -self.max_motor_command)
-            else:
-                # Reset boost state when ball is lost
+            else:                # Handle ball lost during chase
                 if self.boost_active:
-                    self.boost_active = False
-                    print("Forward boost canceled: ball lost")
+                    # Don't cancel boost immediately - allow some time for ball detection recovery
+                    # Ball might be temporarily lost due to motion blur or occlusion during sprint
+                    boost_immunity_time = 3.0  # Allow 3 seconds of immunity before canceling boost
+                    if current_time - self.boost_start_time > boost_immunity_time:
+                        self.boost_active = False
+                        print("Forward boost sprint canceled: ball lost for too long")
+                    else:
+                        print(f"Ball temporarily lost during boost - continuing sprint ({current_time - self.boost_start_time:.1f}s)")
+                        # Continue with last boost speeds even if ball is temporarily lost
+                        left_speed = 800
+                        right_speed = 800
 
         elif self.robot_state == ROBOT_STATE_DELIVER_BALL:
             # State 3: DELIVER_BALL - Explicitly stop motors
@@ -1599,9 +1761,113 @@ class HelloBallsCV:
             left_speed = 0
             right_speed = 0
 
+        elif self.robot_state == ROBOT_STATE_SEARCH:
+            # State 4: SEARCH - Manual controls + automatic person centering
+            
+            # Check if manual override is still active
+            current_time = time.time()
+            manual_override_active = (self.manual_override_time > 0 and 
+                                    current_time - self.manual_override_time < self.manual_override_duration)
+            
+            # Check if automatic person centering should be active
+            if (self.auto_person_centering and 
+                self.detection_mode == MODE_PERSON_DETECTION and 
+                self.best_target is not None and
+                not manual_override_active):
+                
+                # PERSON CENTERING IMPLEMENTATION:
+                # Uses the same normalized coordinate system and x_pid controller as ball tracking
+                # for consistent behavior and tuning across detection modes. Person-specific
+                # scaling (0.7x) provides gentler movement appropriate for human interaction.
+                
+                # Extract person information
+                cls_id, x, y, w, h, conf = self.best_target
+                
+                if cls_id == PERSON_CLASS:
+                    # Calculate person center coordinates
+                    person_center_x = x + w / 2
+                    person_center_y = y + h / 2
+                    
+                    # Get frame dimensions for normalization
+                    if self.camera and self.camera.isOpened():
+                        frame_width = self.camera.get(cv2.CAP_PROP_FRAME_WIDTH)
+                        frame_height = self.camera.get(cv2.CAP_PROP_FRAME_HEIGHT)
+                    else:
+                        frame_width = self.frame_width
+                        frame_height = self.frame_height
+                    
+                    if frame_width > 0 and frame_height > 0:
+                        # Normalize coordinates exactly like ball detection
+                        normalized_x = (person_center_x - frame_width / 2) / (frame_width / 2)  # -1 (left) to 1 (right)
+                        normalized_y = person_center_y / frame_height  # 0 (top) to 1 (bottom)
+                        
+                        # Define centering threshold in normalized coordinates (like ball detection)
+                        x_error_threshold = 0.08  # Within 8% of center horizontally
+                        
+                        if abs(normalized_x) > x_error_threshold:
+                            # Person is not centered - use differential steering to turn in place
+                            # NO forward movement, only left/right turning at low speed
+                            
+                            # Calculate steering output using x_pid controller
+                            steering = self.x_pid.compute(normalized_x)  # Output: -1000 to 1000
+                            
+                            # Scale down for gentle turning
+                            turn_scale = 0.1  # Much smaller scale for slow turning
+                            turn_speed = int(abs(steering) * turn_scale)
+                            
+                            # Ensure minimum turn speed but cap at max
+                            min_turn_speed = 70   # Minimum speed to overcome friction
+                            max_turn_speed = 100  # Maximum turning speed for safety
+                            
+                            if turn_speed < min_turn_speed:
+                                turn_speed = min_turn_speed
+                            elif turn_speed > max_turn_speed:
+                                turn_speed = max_turn_speed
+                            
+                            # Differential steering: opposite motor directions to turn in place
+                            if normalized_x > 0:
+                                # Person is to the right, turn right: right motor faster, left motor slower
+                                left_speed = turn_speed
+                                right_speed = -turn_speed
+                                direction = "right"
+                            else:
+                                # Person is to the left, turn left: left motor faster, right motor slower
+                                left_speed = -turn_speed
+                                right_speed = turn_speed
+                                direction = "left"
+                            
+                            self.search_left_speed = left_speed
+                            self.search_right_speed = right_speed
+                            
+                            print(f"Turning to face person: norm_x={normalized_x:.3f}, turning {direction}, speed={turn_speed}, L={left_speed}, R={right_speed}")
+                        else:
+                            # Person is centered horizontally, stop motors
+                            self.search_left_speed = 0
+                            self.search_right_speed = 0
+                            print("Person centered - robot is facing person")
+                else:
+                    # No person detected or wrong target type, stop automatic control
+                    self.search_left_speed = 0
+                    self.search_right_speed = 0
+                    print("Auto-centering: No person detected - stopping motors")
+            elif manual_override_active:
+                # Manual override is active, show remaining time
+                remaining_time = self.manual_override_duration - (current_time - self.manual_override_time)
+                print(f"Manual override active - auto centering resumes in {remaining_time:.1f}s")
+            
+            # If not using automatic centering, use manual search mode speeds
+            left_speed = self.search_left_speed
+            right_speed = self.search_right_speed
+
         # Always send command to robot (this will trigger auto-reconnect if needed)
         # Use the current robot state regardless of connection status
-        self.serial_comm.send_command(self.robot_state, left_speed, right_speed, 0)
+        # For SEARCH mode and DELIVER_BALL mode, send tilt angle; for other modes, use default 0
+        if self.robot_state == ROBOT_STATE_SEARCH:
+            self.serial_comm.send_command(self.robot_state, left_speed, right_speed, self.tilt_angle)
+        elif self.robot_state == ROBOT_STATE_DELIVER_BALL:
+            self.serial_comm.send_command(self.robot_state, left_speed, right_speed, self.tilt_angle)
+        else:
+            self.serial_comm.send_command(self.robot_state, left_speed, right_speed, 0)
 
 
 # Example usage
@@ -1610,8 +1876,8 @@ if __name__ == "__main__":
     parser.add_argument('--no-preview', action='store_true', help='Disable preview window')
     parser.add_argument('--mode', type=int, default=0, choices=[0, 1],
                         help='Detection mode: 0=Ball Detection, 1=Person Detection')
-    parser.add_argument('--serial-port', type=str, default='/dev/ttyS1',
-                        help='Serial port for robot communication (default: /dev/ttyS1)')
+    parser.add_argument('--serial-port', type=str, default=None,
+                        help='Serial port for robot communication (default: auto-detect)')
     args = parser.parse_args()
 
     cv_system = HelloBallsCV(show_preview=not args.no_preview, detection_mode=args.mode, serial_port=args.serial_port)

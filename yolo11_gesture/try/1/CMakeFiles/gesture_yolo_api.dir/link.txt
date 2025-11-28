@@ -1,0 +1,1 @@
+/usr/bin/c++ -fPIC -O3 -DNDEBUG -flto -shared  -o gesture_yolo_api.cpython-310-aarch64-linux-gnu.so CMakeFiles/gesture_yolo_api.dir/gesture_yolo_api.cpp.o   -L/usr/lib/hbbpu  -Wl,-rpath,/usr/lib/hbbpu /usr/lib/aarch64-linux-gnu/libopencv_imgproc.so.4.5.4d -ldnn -lhbrt /usr/lib/aarch64-linux-gnu/libopencv_core.so.4.5.4d 

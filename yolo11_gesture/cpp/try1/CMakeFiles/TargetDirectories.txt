@@ -1,0 +1,8 @@
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/gesture_api.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/main.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/edit_cache.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/rebuild_cache.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/list_install_components.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/install.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/install/local.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/cpp/try1/CMakeFiles/install/strip.dir

@@ -1,0 +1,3 @@
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/try/1/CMakeFiles/gesture_yolo_api.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/try/1/CMakeFiles/edit_cache.dir
+/home/sunrise/Documents/HelloBalls-Host/yolo11_gesture/try/1/CMakeFiles/rebuild_cache.dir

@@ -177,9 +177,9 @@ class SerialComm:
         
         return self.connected
             
-    def send_command(self, state, motor_speed_1, motor_speed_2, tilt_angle=0):
+    def send_command(self, state, motor_speed_1, motor_speed_2, tilt_angle=0, friction_wheel_speed=0):
         """
-        Send a command to the MCU in the format "state,motor_speed_1,motor_speed_2,tilt_angle".
+        Send a command to the MCU in the format "state,motor_speed_1,motor_speed_2,tilt_angle,friction_wheel_speed".
         If auto_reconnect is enabled and the connection is lost, tries to reconnect.
         
         Args:
@@ -187,6 +187,7 @@ class SerialComm:
             motor_speed_1 (int): Speed value for motor 1
             motor_speed_2 (int): Speed value for motor 2
             tilt_angle (int): Tilt angle value (default: 0)
+            friction_wheel_speed (int): Friction wheel speed value (default: 0, range: 1000-9000)
             
         Returns:
             bool: True if command was sent successfully, False otherwise
@@ -197,8 +198,8 @@ class SerialComm:
             return False
             
         try:
-            # Format the command as "state,motor_speed_1,motor_speed_2,tilt_angle"
-            command = f"{state},{motor_speed_1},{motor_speed_2},{tilt_angle}\n"
+            # Format the command as "state,motor_speed_1,motor_speed_2,tilt_angle,friction_wheel_speed"
+            command = f"{state},{motor_speed_1},{motor_speed_2},{tilt_angle},{friction_wheel_speed}\n"
             self.ser.write(command.encode('ascii'))
             # Remove flush() for non-blocking operation - let OS buffer handle transmission
             return True
@@ -328,8 +329,8 @@ if __name__ == "__main__":
             print("Connected successfully. Starting test...")
             
             # Send some test commands
-            print("Sending stop command (0, 0, 0, 0)")
-            serial_comm.send_command(0, 0, 0, 0)
+            print("Sending stop command (0, 0, 0, 0, 0)")
+            serial_comm.send_command(0, 0, 0, 0, 0)
             time.sleep(0.1)  # Reduced sleep time
             
             # Choose mode
@@ -346,16 +347,17 @@ if __name__ == "__main__":
                 print("0/1/2/3: Set robot state (State 3 allows tilt angle input)")
                 print("Space: Stop motors")
                 print("Q: Exit program")
-                print("\nNote: When selecting state 3, you'll be prompted to enter a tilt angle.")
-                print("The robot will continue using the previous state until tilt input is complete.")
-                print("The tilt angle will then be used for all movement commands in state 3.")
-                print("Other states (0, 1, 2) will use tilt angle 0.")
+                print("\nNote: When selecting state 3, you'll be prompted to enter a tilt angle and friction wheel speed.")
+                print("The robot will continue using the previous state until both inputs are complete.")
+                print("The tilt angle and friction wheel speed will then be used for all movement commands in state 3.")
+                print("Other states (0, 1, 2) will use tilt angle 0 and friction wheel speed 0.")
                 print("\nControls active. Current state: 1")
                 
                 # Initialize controller state
                 current_state = 1
-                wheel_speed = 800  # Default speed
+                wheel_speed = 1500  # Default speed
                 current_tilt_angle = 0  # Track current tilt angle for state 3
+                current_friction_wheel_speed = 0  # Track current friction wheel speed for state 3
                 last_command = None  # Track last command to avoid repeating
                 current_key = None  # Current active key
                 key_last_read_time = 0
@@ -363,14 +365,14 @@ if __name__ == "__main__":
                 # Track key state separately from key input to maintain continuous movement
                 active_movement_key = None  # Key that 's actually controlling movement
                 
-                # Tilt angle input handling
-                waiting_for_tilt_input = False
-                tilt_input_queue = queue.Queue()
-                tilt_input_thread = None
+                # Tilt angle and friction wheel speed input handling
+                waiting_for_inputs = False
+                input_queue = queue.Queue()
+                input_thread = None
                 previous_state = current_state  # Track previous state for state 3 transition
                 
-                def get_tilt_input_threaded(current_tilt, input_queue, old_settings):
-                    """Function to run in separate thread for tilt angle input"""
+                def get_state3_inputs_threaded(current_tilt, current_friction, input_queue, old_settings):
+                    """Function to run in separate thread for tilt angle and friction wheel speed input"""
                     try:
                         # Temporarily restore terminal settings for input
                         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
@@ -381,39 +383,53 @@ if __name__ == "__main__":
                         
                         print(f"\nEnter tilt angle for state 3 (current: {current_tilt}): ", end="", flush=True)
                         
-                        # Read line directly from stdin with blocking mode
-                        import select
-                        
                         # Make stdin blocking temporarily for this thread
                         stdin_fd = sys.stdin.fileno()
                         old_flags = fcntl.fcntl(stdin_fd, fcntl.F_GETFL)
                         fcntl.fcntl(stdin_fd, fcntl.F_SETFL, old_flags & ~os.O_NONBLOCK)
                         
                         try:
-                            # Use readline() which should work better in threaded context
+                            # Get tilt angle
                             tilt_input = sys.stdin.readline().strip()
+                            new_tilt = current_tilt
+                            if tilt_input:
+                                try:
+                                    new_tilt = int(tilt_input)
+                                    print(f"Tilt angle set to: {new_tilt}")
+                                except ValueError:
+                                    print(f"Invalid tilt input, keeping current tilt angle: {current_tilt}")
+                            else:
+                                print(f"Keeping current tilt angle: {current_tilt}")
+                            
+                            # Get friction wheel speed
+                            print(f"Enter friction wheel speed (1000-9000, current: {current_friction}): ", end="", flush=True)
+                            friction_input = sys.stdin.readline().strip()
+                            new_friction = current_friction
+                            if friction_input:
+                                try:
+                                    friction_value = int(friction_input)
+                                    if 1000 <= friction_value <= 9000:
+                                        new_friction = friction_value
+                                        print(f"Friction wheel speed set to: {new_friction}")
+                                    else:
+                                        print(f"Friction speed out of range (1000-9000), keeping current: {current_friction}")
+                                except ValueError:
+                                    print(f"Invalid friction input, keeping current friction speed: {current_friction}")
+                            else:
+                                print(f"Keeping current friction wheel speed: {current_friction}")
+                            
+                            input_queue.put(('success', new_tilt, new_friction))
+                            
                         finally:
                             # Restore non-blocking mode
                             fcntl.fcntl(stdin_fd, fcntl.F_SETFL, old_flags)
-                        
-                        if tilt_input:
-                            try:
-                                new_tilt = int(tilt_input)
-                                input_queue.put(('success', new_tilt))
-                                print(f"Tilt angle set to: {new_tilt}")
-                            except ValueError:
-                                input_queue.put(('error', current_tilt))
-                                print(f"Invalid input, keeping current tilt angle: {current_tilt}")
-                        else:
-                            input_queue.put(('keep', current_tilt))
-                            print(f"Keeping current tilt angle: {current_tilt}")
                             
                     except (EOFError, KeyboardInterrupt):
-                        input_queue.put(('cancelled', current_tilt))
-                        print(f"Input cancelled, keeping current tilt angle: {current_tilt}")
+                        input_queue.put(('cancelled', current_tilt, current_friction))
+                        print(f"Input cancelled, keeping current values: tilt={current_tilt}, friction={current_friction}")
                     except Exception as e:
-                        input_queue.put(('error', current_tilt))
-                        print(f"Error getting input: {e}, keeping current tilt angle: {current_tilt}")
+                        input_queue.put(('error', current_tilt, current_friction))
+                        print(f"Error getting input: {e}, keeping current values: tilt={current_tilt}, friction={current_friction}")
                     
                     print("Returning to keyboard control mode...")
                 
@@ -507,27 +523,28 @@ if __name__ == "__main__":
                                     current_state = new_state
                                     print(f"State changed to: {current_state}")
                                     
-                                    # Special handling for state 3 - prompt for tilt angle in separate thread
-                                    if current_state == 3 and not waiting_for_tilt_input:
-                                        waiting_for_tilt_input = True
-                                        print(f"Continuing with previous state ({previous_state}) while waiting for tilt input...")
-                                        # Start input thread to get tilt angle without blocking serial communication
-                                        tilt_input_thread = threading.Thread(
-                                            target=get_tilt_input_threaded,
-                                            args=(current_tilt_angle, tilt_input_queue, old_settings),
+                                    # Special handling for state 3 - prompt for tilt angle and friction wheel speed in separate thread
+                                    if current_state == 3 and not waiting_for_inputs:
+                                        waiting_for_inputs = True
+                                        print(f"Continuing with previous state ({previous_state}) while waiting for inputs...")
+                                        # Start input thread to get tilt angle and friction wheel speed without blocking serial communication
+                                        input_thread = threading.Thread(
+                                            target=get_state3_inputs_threaded,
+                                            args=(current_tilt_angle, current_friction_wheel_speed, input_queue, old_settings),
                                             daemon=True
                                         )
-                                        tilt_input_thread.start()
+                                        input_thread.start()
                                         
                                 current_key = None  # Reset after state change
                             
-                            # Check for tilt input completion (non-blocking)
-                            if waiting_for_tilt_input:
+                            # Check for input completion (non-blocking)
+                            if waiting_for_inputs:
                                 try:
-                                    result_type, result_value = tilt_input_queue.get_nowait()
-                                    current_tilt_angle = result_value
-                                    waiting_for_tilt_input = False
-                                    print(f"Tilt input complete. Now using state {current_state} with tilt angle {current_tilt_angle}")
+                                    result_type, result_tilt, result_friction = input_queue.get_nowait()
+                                    current_tilt_angle = result_tilt
+                                    current_friction_wheel_speed = result_friction
+                                    waiting_for_inputs = False
+                                    print(f"Input complete. Now using state {current_state} with tilt angle {current_tilt_angle} and friction speed {current_friction_wheel_speed}")
                                     
                                     # Restore raw mode for keyboard controls after input thread completes
                                     tty_settings = termios.tcgetattr(sys.stdin)
@@ -540,40 +557,42 @@ if __name__ == "__main__":
                                     pass
                             
                             # Always send a command to maintain 50Hz communication
-                            # Determine which state and tilt angle to use
-                            if waiting_for_tilt_input and current_state == 3:
-                                # Use previous state while waiting for tilt input
+                            # Determine which state and parameters to use
+                            if waiting_for_inputs and current_state == 3:
+                                # Use previous state while waiting for inputs
                                 effective_state = previous_state
                                 tilt_angle = 0  # Use 0 tilt angle for previous state
+                                friction_speed = 0  # Use 0 friction speed for previous state
                             else:
                                 # Use current state
                                 effective_state = current_state
                                 tilt_angle = current_tilt_angle if current_state == 3 else 0
+                                friction_speed = current_friction_wheel_speed if current_state == 3 else 0
                             
                             if active_movement_key == ' ':  # Use active_movement_key for movement commands
                                 # Stop motors but keep current state
-                                command = (effective_state, 0, 0, tilt_angle)
+                                command = (effective_state, 0, 0, tilt_angle, friction_speed)
                             elif active_movement_key == 'w':
                                 # Forward
-                                command = (effective_state, wheel_speed, wheel_speed, tilt_angle)
+                                command = (effective_state, wheel_speed, wheel_speed, tilt_angle, friction_speed)
                             elif active_movement_key == 'a':
                                 # Left turn
-                                command = (effective_state, wheel_speed//2, -wheel_speed//2, tilt_angle)
+                                command = (effective_state, -wheel_speed//2, wheel_speed//2, tilt_angle, friction_speed)
                             elif active_movement_key == 'd':
                                 # Right turn
-                                command = (effective_state, -wheel_speed//2, wheel_speed//2, tilt_angle)
+                                command = (effective_state, wheel_speed//2, -wheel_speed//2, tilt_angle, friction_speed)
                             elif active_movement_key == 's':
                                 # Backward
-                                command = (effective_state, -wheel_speed, -wheel_speed, tilt_angle)
+                                command = (effective_state, -wheel_speed, -wheel_speed, tilt_angle, friction_speed)
                             else:
                                 # No movement key pressed - send 0 speed to maintain communication
-                                command = (effective_state, 0, 0, tilt_angle)
+                                command = (effective_state, 0, 0, tilt_angle, friction_speed)
                             
                             # Send command at 50Hz (always send to maintain communication)
                             if command:
                                 serial_comm.send_command(*command)
                                 
-                                # Only print when command changes and not too frequently
+                                # Only print when command changes and not too equently
                                 if command != last_command and current_time - last_output_time >= output_interval:
                                     last_command = command
                                     last_output_time = current_time
@@ -585,25 +604,26 @@ if __name__ == "__main__":
                                         action = {
                                             (wheel_speed, wheel_speed): "FORWARD",
                                             (-wheel_speed, -wheel_speed): "BACKWARD",
-                                            (wheel_speed//2, -wheel_speed//2): "LEFT TURN",
-                                            (-wheel_speed//2, wheel_speed//2): "RIGHT TURN"
+                                            (-wheel_speed//2, wheel_speed//2): "LEFT TURN",
+                                            (wheel_speed//2, -wheel_speed//2): "RIGHT TURN"
                                         }.get((command[1], command[2]), "CUSTOM")
                                     
                                     # Update the same line without creating new lines
-                                    print(f"\r{' ' * 120}", end='')  # Clear the line first
-                                    tilt_info = f" | Tilt: {command[3]}" if current_state == 3 and not waiting_for_tilt_input else ""
-                                    if waiting_for_tilt_input and current_state == 3:
-                                        input_status = f" | Using prev state ({previous_state}) - waiting for tilt input..."
+                                    print(f"\r{' ' * 150}", end='')  # Clear the line first
+                                    tilt_info = f" | Tilt: {command[3]}" if current_state == 3 and not waiting_for_inputs else ""
+                                    friction_info = f" | Friction: {command[4]}" if current_state == 3 and not waiting_for_inputs else ""
+                                    if waiting_for_inputs and current_state == 3:
+                                        input_status = f" | Using prev state ({previous_state}) - waiting for inputs..."
                                     else:
                                         input_status = ""
-                                    print(f"\rAction: {action} | Command: state={command[0]}, m1={command[1]}, m2={command[2]}, tilt={command[3]}{tilt_info}{input_status} | Input: ", end='', flush=True)
+                                    print(f"\rAction: {action} | Command: state={command[0]}, m1={command[1]}, m2={command[2]}, tilt={command[3]}, friction={command[4]}{tilt_info}{friction_info}{input_status} | Input: ", end='', flush=True)
                         
                         # If receiving is enabled along with keyboard, do it at the same frequency as sending
                         if receive_active:
                             status = serial_comm.receive_status_message(timeout=0.001)  # Very short timeout
                             if status and current_time - last_output_time >= output_interval:
                                 # Update the same line without creating new lines
-                                print(f"\r{' ' * 120}", end='')  # Clear the line first
+                                print(f"\r{' ' * 150}", end='')  # Clear the line first
                                 print(f"\rReceived status: State={status['state']}, "
                                     f"Wheels=({status['wheel1_distance']:.2f},{status['wheel2_distance']:.2f}), "
                                     f"IMU=({status['imu_x']:.2f},{status['imu_y']:.2f},{status['imu_z']:.2f}), "
@@ -615,9 +635,9 @@ if __name__ == "__main__":
                 
                 finally:
                     # Clean up any running input thread
-                    if tilt_input_thread and tilt_input_thread.is_alive():
+                    if input_thread and input_thread.is_alive():
                         # Give the thread a short time to finish
-                        tilt_input_thread.join(timeout=0.5)
+                        input_thread.join(timeout=0.5)
                     
                     # Restore terminal settings
                     termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)

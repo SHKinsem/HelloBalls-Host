@@ -21,7 +21,7 @@ sys.path.append(os.path.join(script_dir, "scripts"))
 # Import our custom modules
 try:
     from scripts.HelloBalls_CV import HelloBallsCV
-    from scripts.HelloBalls_Serial import SerialComm
+    from scripts.HelloBalls_Serial_tmp import SerialComm
 except ImportError as e:
     print(f"Error importing required modules: {e}")
     print("Make sure you are running this script from the HelloBalls-Host directory")
