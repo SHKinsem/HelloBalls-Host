@@ -12,10 +12,12 @@ def main():
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--print-imu", action="store_true", help="Print received IMU frames.")
     parser.add_argument("--enable-camera", action="store_true", help="Read frames from an OpenCV camera.")
-    parser.add_argument("--camera-id", type=int, default=None, help="Open a specific camera index. Auto-detects by default.")
-    parser.add_argument("--camera-width", type=int, default=1280)
+    parser.add_argument("--camera-device", default="/dev/video0", help="V4L2 camera device path.")
+    parser.add_argument("--camera-width", type=int, default=2560)
     parser.add_argument("--camera-height", type=int, default=720)
     parser.add_argument("--camera-buffer-size", type=int, default=1)
+    parser.add_argument("--camera-fourcc", default="MJPG", help="Request a pixel format such as MJPG or YUYV.")
+    parser.add_argument("--camera-fps", type=float, default=None, help="Request camera FPS.")
     parser.add_argument("--camera-preview", action="store_true", help="Show an OpenCV preview window.")
     parser.add_argument("--print-camera-fps", action="store_true", help="Print camera read FPS once per second.")
     args = parser.parse_args()
@@ -37,10 +39,12 @@ def main():
     if args.enable_camera:
         camera = OpenCVCamera(
             CameraConfig(
-                camera_id=args.camera_id,
+                camera_device=args.camera_device,
                 width=args.camera_width,
                 height=args.camera_height,
                 buffer_size=args.camera_buffer_size,
+                fourcc=args.camera_fourcc,
+                fps=args.camera_fps,
             )
         )
         camera_id = camera.open()

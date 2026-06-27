@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import glob
-import os
 import time
 from dataclasses import dataclass
 from importlib import import_module
@@ -13,17 +11,18 @@ _cv2_import_error: Optional[Exception] = None
 
 @dataclass(frozen=True)
 class CameraConfig:
-    camera_id: Optional[int] = None
-    width: int = 1280
+    camera_device: str = "/dev/video0"
+    width: int = 2560
     height: int = 720
     buffer_size: int = 1
-    search_count: int = 10
+    fourcc: Optional[str] = "MJPG"
+    fps: Optional[float] = None
 
 
 @dataclass(frozen=True)
 class CameraFrame:
     image: object
-    camera_id: int
+    camera_device: str
     captured_at: float
     width: int
     height: int
@@ -32,63 +31,35 @@ class CameraFrame:
 class OpenCVCamera:
     def __init__(self, config: CameraConfig | None = None) -> None:
         self.config = config or CameraConfig()
-        self.camera_id: Optional[int] = None
+        self.camera_device: Optional[str] = None
         self._capture = None
 
-    @staticmethod
-    def find_available_camera(search_count: int = 10) -> Optional[int]:
-        _require_cv2()
-
-        for camera_id in range(search_count):
-            if _can_read_camera(camera_id):
-                return camera_id
-
-        if os.path.exists("/dev/"):
-            for device in sorted(glob.glob("/dev/video*")):
-                try:
-                    camera_id = int(device.removeprefix("/dev/video"))
-                except ValueError:
-                    continue
-                if _can_read_camera(camera_id):
-                    return camera_id
-
-        return None
-
-    def open(self) -> int:
-        cv = _require_cv2()
-
-        camera_id = self.config.camera_id
-        if camera_id is None:
-            camera_id = self.find_available_camera(self.config.search_count)
-        if camera_id is None:
-            raise RuntimeError("No readable OpenCV camera was found.")
-
-        capture = cv.VideoCapture(camera_id)
+    def open(self) -> str:
+        camera_device = self.config.camera_device
+        capture = _open_capture(camera_device)
         if not capture.isOpened():
             capture.release()
-            raise RuntimeError(f"Failed to open OpenCV camera {camera_id}.")
+            raise RuntimeError(f"Failed to open OpenCV camera {camera_device}.")
 
-        capture.set(cv.CAP_PROP_FRAME_WIDTH, self.config.width)
-        capture.set(cv.CAP_PROP_FRAME_HEIGHT, self.config.height)
-        capture.set(cv.CAP_PROP_BUFFERSIZE, self.config.buffer_size)
+        _configure_capture(capture, self.config)
 
         ok, frame = capture.read()
         if not ok or frame is None:
             capture.release()
-            raise RuntimeError(f"Camera {camera_id} opened but did not return a frame.")
+            raise RuntimeError(f"Camera {camera_device} opened but did not return a frame.")
 
-        self.camera_id = camera_id
+        self.camera_device = camera_device
         self._capture = capture
-        return camera_id
+        return camera_device
 
     def close(self) -> None:
         if self._capture is not None:
             self._capture.release()
         self._capture = None
-        self.camera_id = None
+        self.camera_device = None
 
     def read(self) -> Optional[CameraFrame]:
-        if self._capture is None or self.camera_id is None:
+        if self._capture is None or self.camera_device is None:
             self.open()
 
         ok, image = self._capture.read()
@@ -98,7 +69,7 @@ class OpenCVCamera:
         height, width = image.shape[:2]
         return CameraFrame(
             image=image,
-            camera_id=self.camera_id,
+            camera_device=self.camera_device,
             captured_at=time.time(),
             width=width,
             height=height,
@@ -138,13 +109,19 @@ def _require_cv2():
     return cv2
 
 
-def _can_read_camera(camera_id: int) -> bool:
+def _open_capture(camera_device: str):
     cv = _require_cv2()
-    capture = cv.VideoCapture(camera_id)
-    try:
-        if not capture.isOpened():
-            return False
-        ok, frame = capture.read()
-        return bool(ok and frame is not None)
-    finally:
-        capture.release()
+    return cv.VideoCapture(camera_device, cv.CAP_V4L2)
+
+
+def _configure_capture(capture, config: CameraConfig) -> None:
+    cv = _require_cv2()
+    if config.fourcc:
+        if len(config.fourcc) != 4:
+            raise RuntimeError(f"Camera FOURCC must be four characters, got {config.fourcc!r}.")
+        capture.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*config.fourcc))
+    capture.set(cv.CAP_PROP_FRAME_WIDTH, config.width)
+    capture.set(cv.CAP_PROP_FRAME_HEIGHT, config.height)
+    if config.fps is not None:
+        capture.set(cv.CAP_PROP_FPS, config.fps)
+    capture.set(cv.CAP_PROP_BUFFERSIZE, config.buffer_size)
