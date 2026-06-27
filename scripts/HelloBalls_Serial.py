@@ -256,7 +256,7 @@ def serial_monitor(port: str, baudrate: int = 115200) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Receive ESP32S3 IMU frames over UART.")
-    parser.add_argument("--port", default="/dev/ttyUSB0", help="UART device path, for example /dev/ttyS0")
+    parser.add_argument("--port", default="/dev/ttyS1", help="UART device path, for example /dev/ttyS0")
     parser.add_argument("--baudrate", type=int, default=115200)
     args = parser.parse_args()
     serial_monitor(port=args.port, baudrate=args.baudrate)

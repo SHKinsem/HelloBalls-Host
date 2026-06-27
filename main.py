@@ -6,7 +6,7 @@ from scripts import HelloBalls_Serial
 
 def main():
     parser = argparse.ArgumentParser(description="HelloBalls RDK host entry point.")
-    parser.add_argument("--serial-port", default="/dev/ttyUSB0", help="UART device path for the MCU.")
+    parser.add_argument("--serial-port", default="/dev/ttyS1", help="UART device path for the MCU.")
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--print-imu", action="store_true", help="Print received IMU frames.")
     args = parser.parse_args()
