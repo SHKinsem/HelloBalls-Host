@@ -5,7 +5,7 @@ import struct
 import threading
 import time
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 try:
     import serial
@@ -149,6 +149,7 @@ class SerialReceiver:
         baudrate: int = 115200,
         timeout: float = 0.05,
         read_size: int = 64,
+        state_callback: Optional[Callable[[ImuState], None]] = None,
     ) -> None:
         self.port = port
         self.baudrate = baudrate
@@ -156,6 +157,7 @@ class SerialReceiver:
         self.read_size = read_size
         self.latest_state: Optional[ImuState] = None
         self.frames_received = 0
+        self.state_callback = state_callback
         self._parser = FrameParser()
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -197,6 +199,9 @@ class SerialReceiver:
         with self._lock:
             self.latest_state = state
             self.frames_received += len(frames)
+        if self.state_callback is not None:
+            for parsed_state in frames:
+                self.state_callback(parsed_state)
         return state
 
     def start(self) -> None:

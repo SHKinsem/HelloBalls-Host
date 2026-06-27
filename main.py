@@ -20,6 +20,13 @@ def main():
     parser.add_argument("--camera-fps", type=float, default=None, help="Request camera FPS.")
     parser.add_argument("--camera-preview", action="store_true", help="Show an OpenCV preview window.")
     parser.add_argument("--print-camera-fps", action="store_true", help="Print camera read FPS once per second.")
+    parser.add_argument("--ros-publish", action="store_true", help="Publish camera and IMU data as ROS2 topics.")
+    parser.add_argument("--ros-node-name", default="helloballs_sensor_publisher")
+    parser.add_argument("--camera-topic", default="/camera/image_raw")
+    parser.add_argument("--camera-info-topic", default="/camera/camera_info")
+    parser.add_argument("--imu-topic", default="/imu/data_raw")
+    parser.add_argument("--camera-frame-id", default="camera_link")
+    parser.add_argument("--imu-frame-id", default="imu_link")
     args = parser.parse_args()
 
     if args.no_serial and not args.enable_camera:
@@ -28,11 +35,35 @@ def main():
     receiver = None
     camera = None
     preview_cv2 = None
+    ros_publisher = None
     frame_count = 0
     fps_started_at = time.time()
 
+    if args.ros_publish:
+        from scripts.ros_publishers import RosPublisherConfig, RosSensorPublisher
+
+        ros_publisher = RosSensorPublisher(
+            RosPublisherConfig(
+                node_name=args.ros_node_name,
+                camera_topic=args.camera_topic,
+                camera_info_topic=args.camera_info_topic,
+                imu_topic=args.imu_topic,
+                camera_frame_id=args.camera_frame_id,
+                imu_frame_id=args.imu_frame_id,
+            )
+        )
+        print(
+            "ROS2 publishers started: "
+            f"{args.camera_topic}, {args.camera_info_topic}, {args.imu_topic}."
+        )
+
     if not args.no_serial:
-        receiver = HelloBalls_Serial.SerialReceiver(port=args.serial_port, baudrate=args.baudrate)
+        imu_callback = ros_publisher.publish_imu if ros_publisher is not None else None
+        receiver = HelloBalls_Serial.SerialReceiver(
+            port=args.serial_port,
+            baudrate=args.baudrate,
+            state_callback=imu_callback,
+        )
         receiver.start()
         print(f"Serial receiver started on {args.serial_port}.")
 
@@ -80,6 +111,10 @@ def main():
                     frame_count = 0
                     fps_started_at = now
 
+                if ros_publisher is not None:
+                    ros_publisher.publish_camera(frame)
+                    ros_publisher.spin_once()
+
                 if args.camera_preview:
                     preview_cv2.imshow("HelloBalls Camera", frame.image)
                     if preview_cv2.waitKey(1) & 0xFF == ord("q"):
@@ -96,6 +131,8 @@ def main():
             preview_cv2.destroyAllWindows()
         if receiver is not None:
             receiver.close()
+        if ros_publisher is not None:
+            ros_publisher.close()
 
 
 if __name__ == "__main__":
