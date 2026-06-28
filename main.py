@@ -2,6 +2,7 @@ import argparse
 import time
 
 from scripts import HelloBalls_Serial
+from scripts.keyboard_control import KeyboardController
 from scripts.opencv_camera import CameraConfig, OpenCVCamera, get_cv2
 
 
@@ -40,15 +41,21 @@ def main():
         default=0.0,
         help="Diagonal linear acceleration covariance variance in (m/s^2)^2.",
     )
+    parser.add_argument("--keyboard-control", action="store_true", help="Enable keyboard driving over the MCU UART.")
+    parser.add_argument("--keyboard-speed", type=int, default=100, help="Motor speed used by keyboard control.")
+    parser.add_argument("--keyboard-state", type=int, default=1, help="MCU state value used for keyboard motor commands.")
     args = parser.parse_args()
 
     if args.no_serial and not args.enable_camera:
         parser.error("Nothing to run: remove --no-serial or add --enable-camera.")
+    if args.keyboard_control and args.no_serial:
+        parser.error("--keyboard-control requires serial; remove --no-serial.")
 
     receiver = None
     camera = None
     preview_cv2 = None
     ros_publisher = None
+    keyboard_controller = None
     frame_count = 0
     fps_started_at = time.time()
 
@@ -82,6 +89,14 @@ def main():
         )
         receiver.start()
         print(f"Serial receiver started on {args.serial_port}.")
+
+        if args.keyboard_control:
+            keyboard_controller = KeyboardController(
+                serial_receiver=receiver,
+                speed=args.keyboard_speed,
+                state=args.keyboard_state,
+            )
+            keyboard_controller.start()
 
     if args.enable_camera:
         camera = OpenCVCamera(
@@ -145,6 +160,8 @@ def main():
             camera.close()
         if preview_cv2 is not None:
             preview_cv2.destroyAllWindows()
+        if keyboard_controller is not None:
+            keyboard_controller.close()
         if receiver is not None:
             receiver.close()
         if ros_publisher is not None:

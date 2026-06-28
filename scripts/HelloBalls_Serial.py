@@ -160,6 +160,7 @@ class SerialReceiver:
         self.state_callback = state_callback
         self._parser = FrameParser()
         self._lock = threading.Lock()
+        self._write_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._serial = None
@@ -203,6 +204,34 @@ class SerialReceiver:
             for parsed_state in frames:
                 self.state_callback(parsed_state)
         return state
+
+    def send_command(
+        self,
+        state: int,
+        motor_speed_1: int,
+        motor_speed_2: int,
+        tilt_angle: int = 0,
+        friction_wheel_speed: int = 0,
+    ) -> None:
+        if self._serial is None:
+            self.open()
+
+        command = f"{state},{motor_speed_1},{motor_speed_2},{tilt_angle},{friction_wheel_speed}\n"
+        with self._write_lock:
+            self._serial.write(command.encode("ascii"))
+
+    def send_movement_command(
+        self,
+        state: int,
+        wheel1_speed: int,
+        wheel2_speed: int,
+    ) -> None:
+        if self._serial is None:
+            self.open()
+
+        command = f"{state},{wheel1_speed},{wheel2_speed}\n"
+        with self._write_lock:
+            self._serial.write(command.encode("ascii"))
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
