@@ -27,6 +27,19 @@ def main():
     parser.add_argument("--imu-topic", default="/imu/data_raw")
     parser.add_argument("--camera-frame-id", default="camera_link")
     parser.add_argument("--imu-frame-id", default="imu_link")
+    parser.add_argument("--camera-info-yaml", default=None, help="ROS camera_calibration YAML file.")
+    parser.add_argument(
+        "--imu-angular-velocity-variance",
+        type=float,
+        default=0.0,
+        help="Diagonal angular velocity covariance variance in (rad/s)^2.",
+    )
+    parser.add_argument(
+        "--imu-linear-acceleration-variance",
+        type=float,
+        default=0.0,
+        help="Diagonal linear acceleration covariance variance in (m/s^2)^2.",
+    )
     args = parser.parse_args()
 
     if args.no_serial and not args.enable_camera:
@@ -50,6 +63,9 @@ def main():
                 imu_topic=args.imu_topic,
                 camera_frame_id=args.camera_frame_id,
                 imu_frame_id=args.imu_frame_id,
+                camera_info_yaml=args.camera_info_yaml,
+                imu_angular_velocity_variance=args.imu_angular_velocity_variance,
+                imu_linear_acceleration_variance=args.imu_linear_acceleration_variance,
             )
         )
         print(
