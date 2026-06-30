@@ -1,0 +1,16 @@
+model_type: PINHOLE
+camera_name: helloballs_camera
+image_width: 2560
+image_height: 720
+
+distortion_parameters:
+   k1: 0.0
+   k2: 0.0
+   p1: 0.0
+   p2: 0.0
+
+projection_parameters:
+   fx: 0.0
+   fy: 0.0
+   cx: 0.0
+   cy: 0.0

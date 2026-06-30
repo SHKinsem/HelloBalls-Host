@@ -1,0 +1,9 @@
+topics:
+  - /camera/image_raw
+  - /camera/camera_info
+  - /imu/data_raw
+  - /imu/data
+  - /vio/odometry
+  - /vio/path
+  - /tf
+  - /tf_static

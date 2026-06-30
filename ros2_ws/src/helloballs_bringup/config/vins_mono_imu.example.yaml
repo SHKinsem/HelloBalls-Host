@@ -1,0 +1,41 @@
+image0_topic: /camera/image_raw
+image1_topic: ""
+imu_topic: /imu/data_raw
+output_path: /tmp
+
+imu: 1
+num_of_cam: 1
+image_width: 2560
+image_height: 720
+cam0_calib: helloballs_camera_pinhole.example.yaml
+
+estimate_extrinsic: 1
+body_T_cam0:
+   rows: 4
+   cols: 4
+   dt: d
+   data: [1.0, 0.0, 0.0, 0.0,
+          0.0, 1.0, 0.0, 0.0,
+          0.0, 0.0, 1.0, 0.0,
+          0.0, 0.0, 0.0, 1.0]
+
+acc_n: 0.0
+gyr_n: 0.0
+acc_w: 0.0
+gyr_w: 0.0
+g_norm: 9.80665
+
+estimate_td: 1
+td: 0.0
+
+max_cnt: 150
+min_dist: 30
+freq: 10
+F_threshold: 1.0
+show_track: 1
+flow_back: 1
+
+multiple_thread: 1
+max_solver_time: 0.04
+max_num_iterations: 8
+keyframe_parallax: 10.0

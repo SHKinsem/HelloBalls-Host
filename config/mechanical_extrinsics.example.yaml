@@ -1,0 +1,48 @@
+# Placeholder mechanical extrinsics. Replace all identity transforms with measured
+# values before running visual-inertial odometry on the robot.
+frames:
+  base_frame: base_link
+  camera_frame: camera_link
+  imu_frame: imu_link
+
+base_link_T_camera_link:
+  parent_frame: base_link
+  child_frame: camera_link
+  translation_xyz_m: [0.0, 0.0, 0.0]
+  rotation_rpy_rad: [0.0, 0.0, 0.0]
+  rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+  transform_matrix:
+    rows: 4
+    cols: 4
+    data:
+      [1.0, 0.0, 0.0, 0.0,
+       0.0, 1.0, 0.0, 0.0,
+       0.0, 0.0, 1.0, 0.0,
+       0.0, 0.0, 0.0, 1.0]
+
+base_link_T_imu_link:
+  parent_frame: base_link
+  child_frame: imu_link
+  translation_xyz_m: [0.0, 0.0, 0.0]
+  rotation_rpy_rad: [0.0, 0.0, 0.0]
+  rotation_xyzw: [0.0, 0.0, 0.0, 1.0]
+  transform_matrix:
+    rows: 4
+    cols: 4
+    data:
+      [1.0, 0.0, 0.0, 0.0,
+       0.0, 1.0, 0.0, 0.0,
+       0.0, 0.0, 1.0, 0.0,
+       0.0, 0.0, 0.0, 1.0]
+
+vins_body_T_cam0:
+  body_frame: imu_link
+  camera_frame: camera_link
+  transform_matrix:
+    rows: 4
+    cols: 4
+    data:
+      [1.0, 0.0, 0.0, 0.0,
+       0.0, 1.0, 0.0, 0.0,
+       0.0, 0.0, 1.0, 0.0,
+       0.0, 0.0, 0.0, 1.0]

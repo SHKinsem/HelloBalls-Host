@@ -1,0 +1,25 @@
+frames:
+  base: base_link
+  camera: camera_link
+  imu: imu_link
+
+topics:
+  image_raw: /camera/image_raw
+  camera_info: /camera/camera_info
+  imu_raw: /imu/data_raw
+  imu_vio: /imu/data
+  vio_odometry: /vio/odometry
+  vio_path: /vio/path
+
+camera:
+  device: /dev/video0
+  width: 2560
+  height: 720
+  fps: 30.0
+  encoding_for_vio: mono8
+  camera_info_yaml: config/camera_info.example.yaml
+
+imu:
+  expected_rate_hz: 100.0
+  angular_velocity_variance: 0.0
+  linear_acceleration_variance: 0.0

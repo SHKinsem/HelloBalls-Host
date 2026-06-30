@@ -1,0 +1,3 @@
+[submodule "ros2_ws/src/third_party/vins_fusion_ros2"]
+	path = ros2_ws/src/third_party/vins_fusion_ros2
+	url = https://github.com/BelkanMag/HelloBalls-VINS-Fusion.git
