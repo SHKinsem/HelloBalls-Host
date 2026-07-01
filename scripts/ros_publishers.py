@@ -90,8 +90,8 @@ class RosSensorPublisher:
 
     def publish_imu(self, state: ImuState) -> None:
         stamp = _stamp_from_unix_time(state.received_at, self.time_msg)
-        acc_x, acc_y, acc_z = state.acc_g
-        gyro_x, gyro_y, gyro_z = state.gyro_dps
+        acc_x, acc_y, acc_z = _remap_imu_raw_to_base(state.acc_g)
+        gyro_x, gyro_y, gyro_z = _remap_imu_raw_to_base(state.gyro_dps)
 
         imu_msg = self.imu_msg()
         imu_msg.header.stamp = stamp
@@ -130,6 +130,11 @@ def _image_encoding(image) -> str:
     if channels == 4:
         return "bgra8"
     raise RuntimeError(f"Unsupported camera image shape: {image.shape}")
+
+
+def _remap_imu_raw_to_base(values: tuple[float, float, float]) -> tuple[float, float, float]:
+    raw_x, raw_y, raw_z = values
+    return raw_x, -raw_z, raw_y
 
 
 def _image_step(image, width: int) -> int:

@@ -10,13 +10,16 @@ image_height: 720
 cam0_calib: helloballs_camera_pinhole.example.yaml
 
 estimate_extrinsic: 1
+# Initial imu/body-to-camera transform. Translation comes from the mechanical
+# camera1 position minus the approximate IMU position, assuming imu_link axes
+# are aligned with base_link. Verify the rotation before trusting VIO output.
 body_T_cam0:
    rows: 4
    cols: 4
    dt: d
-   data: [1.0, 0.0, 0.0, 0.0,
-          0.0, 1.0, 0.0, 0.0,
-          0.0, 0.0, 1.0, 0.0,
+   data: [1.0, 0.0, 0.0, 0.16342,
+          0.0, 1.0, 0.0, 0.063,
+          0.0, 0.0, 1.0, 0.03555,
           0.0, 0.0, 0.0, 1.0]
 
 acc_n: 0.0
