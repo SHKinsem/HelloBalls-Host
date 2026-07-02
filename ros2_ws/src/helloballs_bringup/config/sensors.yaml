@@ -13,7 +13,7 @@ topics:
 
 camera:
   device: /dev/video0
-  width: 2560
+  width: 1280
   height: 720
   fps: 30.0
   encoding_for_vio: mono8

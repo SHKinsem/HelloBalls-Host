@@ -1,3 +1,5 @@
+%YAML:1.0
+---
 image0_topic: /camera/image_raw
 image1_topic: ""
 imu_topic: /imu/data_raw
@@ -5,7 +7,7 @@ output_path: /tmp
 
 imu: 1
 num_of_cam: 1
-image_width: 2560
+image_width: 1280
 image_height: 720
 cam0_calib: helloballs_camera_pinhole.example.yaml
 
