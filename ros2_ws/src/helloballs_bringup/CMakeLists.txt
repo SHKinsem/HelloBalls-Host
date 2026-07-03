@@ -12,7 +12,15 @@ target_include_directories(camera_publisher_node PRIVATE ${OpenCV_INCLUDE_DIRS})
 target_link_libraries(camera_publisher_node ${OpenCV_LIBRARIES})
 ament_target_dependencies(camera_publisher_node rclcpp sensor_msgs)
 
-install(TARGETS camera_publisher_node
+add_executable(grayscale_converter_node src/grayscale_converter_node.cpp)
+target_compile_features(grayscale_converter_node PUBLIC cxx_std_17)
+target_include_directories(grayscale_converter_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(grayscale_converter_node ${OpenCV_LIBRARIES})
+ament_target_dependencies(grayscale_converter_node rclcpp sensor_msgs)
+
+install(TARGETS
+  camera_publisher_node
+  grayscale_converter_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

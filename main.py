@@ -18,6 +18,11 @@ def main():
         action="store_true",
         help="Publish IMU data and start the ROS2 camera bringup launch.",
     )
+    parser.add_argument(
+        "--ros-localization",
+        action="store_true",
+        help="Start IMU, camera, mono image conversion, and VINS odometry.",
+    )
     parser.add_argument("--ros-node-name", default="helloballs_sensor_publisher")
     parser.add_argument("--imu-topic", default="/imu/data_raw")
     parser.add_argument("--imu-frame-id", default="imu_link")
@@ -48,17 +53,42 @@ def main():
     parser.add_argument("--camera-fps", type=float, default=30.0)
     parser.add_argument("--camera-fourcc", default="MJPG")
     parser.add_argument("--camera-frame-id", default="camera_link")
-    parser.add_argument("--camera-grayscale", action="store_true")
+    parser.add_argument(
+        "--camera-mono-converter",
+        action="store_true",
+        help="Start a backend ROS2 node that converts /camera/image_raw to mono8.",
+    )
+    parser.add_argument("--camera-mono-topic", default="/camera/image_mono")
     parser.add_argument("--camera-buffer-size", type=int, default=4)
     parser.add_argument("--no-v4l2-ctl", action="store_true", help="Do not let camera launch run v4l2-ctl.")
     parser.add_argument("--camera-info-rate-hz", type=float, default=1.0)
+    parser.add_argument(
+        "--ros-vins",
+        action="store_true",
+        help="Start helloballs_bringup vins.launch.py alongside this host process.",
+    )
+    parser.add_argument("--vins-config-file", default="")
+    parser.add_argument("--vins-image-topic", default=None)
+    parser.add_argument("--vins-imu-topic", default=None)
+    parser.add_argument("--vins-package", default="vins")
+    parser.add_argument("--vins-executable", default="vins_node")
     args = parser.parse_args()
 
+    if args.ros_localization:
+        args.ros_publish = True
+        args.ros_camera = True
+        args.camera_mono_converter = True
+        args.ros_vins = True
     if args.ros_sensors:
         args.ros_publish = True
         args.ros_camera = True
 
-    if args.no_serial and not args.ros_camera:
+    if args.vins_image_topic is None:
+        args.vins_image_topic = args.camera_mono_topic if args.camera_mono_converter else "/camera/image_raw"
+    if args.vins_imu_topic is None:
+        args.vins_imu_topic = args.imu_topic
+
+    if args.no_serial and not (args.ros_camera or args.ros_vins):
         parser.error("Nothing to run: remove --no-serial.")
     if args.keyboard_control and args.no_serial:
         parser.error("--keyboard-control requires serial; remove --no-serial.")
@@ -66,12 +96,12 @@ def main():
     receiver = None
     ros_publisher = None
     keyboard_controller = None
-    camera_launch = None
+    managed_launches = []
 
     try:
-        if args.ros_camera:
-            from scripts.ros_launch import RosLaunchConfig, RosLaunchProcess
+        from scripts.ros_launch import RosLaunchConfig, RosLaunchProcess
 
+        if args.ros_camera:
             camera_launch = RosLaunchProcess(
                 RosLaunchConfig(
                     workspace=Path(args.ros_workspace),
@@ -84,15 +114,39 @@ def main():
                         "camera_fps": str(args.camera_fps),
                         "camera_fourcc": args.camera_fourcc,
                         "camera_frame_id": args.camera_frame_id,
-                        "camera_grayscale": str(args.camera_grayscale).lower(),
                         "camera_buffer_size": str(args.camera_buffer_size),
                         "use_v4l2_ctl": str(not args.no_v4l2_ctl).lower(),
                         "camera_info_rate_hz": str(args.camera_info_rate_hz),
+                        "start_mono_converter": str(args.camera_mono_converter).lower(),
+                        "mono_image_topic": args.camera_mono_topic,
                     },
                 )
             )
             camera_launch.start()
+            managed_launches.append(("camera bringup", camera_launch))
             print("ROS2 camera bringup started: helloballs_bringup camera.launch.py.")
+
+        if args.ros_vins:
+            vins_launch = RosLaunchProcess(
+                RosLaunchConfig(
+                    workspace=Path(args.ros_workspace),
+                    package="helloballs_bringup",
+                    launch_file="vins.launch.py",
+                    launch_arguments={
+                        "config_file": args.vins_config_file,
+                        "image_topic": args.vins_image_topic,
+                        "imu_topic": args.vins_imu_topic,
+                        "vins_package": args.vins_package,
+                        "estimator_executable": args.vins_executable,
+                    },
+                )
+            )
+            vins_launch.start()
+            managed_launches.append(("VINS odometry", vins_launch))
+            print(
+                "ROS2 VINS odometry started: "
+                f"image={args.vins_image_topic}, imu={args.vins_imu_topic}."
+            )
 
         if args.ros_publish:
             from scripts.ros_publishers import RosPublisherConfig, RosSensorPublisher
@@ -128,10 +182,10 @@ def main():
 
         print("HelloBalls host running. Press Ctrl+C to stop.")
         while True:
-            if camera_launch is not None:
-                camera_returncode = camera_launch.poll()
-                if camera_returncode is not None:
-                    raise RuntimeError(f"ROS2 camera bringup exited with code {camera_returncode}.")
+            for launch_name, launch_process in managed_launches:
+                returncode = launch_process.poll()
+                if returncode is not None:
+                    raise RuntimeError(f"ROS2 {launch_name} exited with code {returncode}.")
 
             if receiver is not None:
                 state = receiver.get_latest_state()
@@ -153,8 +207,8 @@ def main():
             receiver.close()
         if ros_publisher is not None:
             ros_publisher.close()
-        if camera_launch is not None:
-            camera_launch.close()
+        for _, launch_process in reversed(managed_launches):
+            launch_process.close()
 
 
 if __name__ == "__main__":

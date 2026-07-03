@@ -5,6 +5,7 @@ frames:
 
 topics:
   image_raw: /camera/image_raw
+  image_mono: /camera/image_mono
   camera_info: /camera/camera_info
   imu_raw: /imu/data_raw
   imu_vio: /imu/data

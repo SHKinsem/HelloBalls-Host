@@ -8,7 +8,6 @@
 #include <tuple>
 #include <utility>
 
-#include <opencv2/imgproc.hpp>
 #include <opencv2/opencv.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
@@ -79,7 +78,6 @@ public:
     fps_ = declare_parameter<double>("camera_fps", 30.0);
     fourcc_ = declare_parameter<std::string>("camera_fourcc", "MJPG");
     frame_id_ = declare_parameter<std::string>("camera_frame_id", "camera_link");
-    grayscale_ = declare_parameter<bool>("camera_grayscale", false);
     use_v4l2_ctl_ = declare_parameter<bool>("use_v4l2_ctl", true);
     buffer_size_ = declare_parameter<int>("camera_buffer_size", 4);
     camera_info_rate_hz_ = declare_parameter<double>("camera_info_rate_hz", 1.0);
@@ -157,39 +155,22 @@ private:
     }
     const auto read_finished_at = std::chrono::steady_clock::now();
 
-    cv::Mat output;
-    std::string encoding;
-    if (grayscale_) {
-      if (frame.channels() == 1) {
-        output = frame;
-      } else {
-        cv::cvtColor(frame, gray_frame_, cv::COLOR_BGR2GRAY);
-        output = gray_frame_;
-      }
-      encoding = "mono8";
-    } else {
-      output = frame;
-      encoding = frame.channels() == 1 ? "mono8" : "bgr8";
-    }
-    const auto convert_finished_at = std::chrono::steady_clock::now();
-
     auto msg = sensor_msgs::msg::Image();
     msg.header.stamp = now();
     msg.header.frame_id = frame_id_;
-    msg.height = static_cast<uint32_t>(output.rows);
-    msg.width = static_cast<uint32_t>(output.cols);
-    msg.encoding = encoding;
+    msg.height = static_cast<uint32_t>(frame.rows);
+    msg.width = static_cast<uint32_t>(frame.cols);
+    msg.encoding = frame.channels() == 1 ? "mono8" : "bgr8";
     msg.is_bigendian = false;
-    msg.step = static_cast<sensor_msgs::msg::Image::_step_type>(output.cols * output.elemSize());
-    const auto data_size = static_cast<size_t>(msg.step) * output.rows;
+    msg.step = static_cast<sensor_msgs::msg::Image::_step_type>(frame.cols * frame.elemSize());
+    const auto data_size = static_cast<size_t>(msg.step) * frame.rows;
     msg.data.resize(data_size);
-    std::memcpy(msg.data.data(), output.data, data_size);
+    std::memcpy(msg.data.data(), frame.data, data_size);
     image_pub_->publish(std::move(msg));
     const auto publish_finished_at = std::chrono::steady_clock::now();
 
     read_time_sum_ += std::chrono::duration<double>(read_finished_at - read_started_at).count();
-    convert_time_sum_ += std::chrono::duration<double>(convert_finished_at - read_finished_at).count();
-    publish_time_sum_ += std::chrono::duration<double>(publish_finished_at - convert_finished_at).count();
+    publish_time_sum_ += std::chrono::duration<double>(publish_finished_at - read_finished_at).count();
 
     maybePublishCameraInfo();
     frames_since_log_++;
@@ -199,14 +180,12 @@ private:
       const auto denom = std::max(frames_since_log_, 1);
       RCLCPP_INFO(
         get_logger(),
-        "camera publish FPS: %.1f, avg read %.1fms, convert %.1fms, publish %.1fms",
+        "camera publish FPS: %.1f, avg read %.1fms, publish %.1fms",
         fps,
         1000.0 * read_time_sum_ / denom,
-        1000.0 * convert_time_sum_ / denom,
         1000.0 * publish_time_sum_ / denom);
       frames_since_log_ = 0;
       read_time_sum_ = 0.0;
-      convert_time_sum_ = 0.0;
       publish_time_sum_ = 0.0;
       last_log_time_ = t;
     }
@@ -248,11 +227,9 @@ private:
   double fps_{30.0};
   double actual_fps_{0.0};
   double camera_info_rate_hz_{1.0};
-  bool grayscale_{false};
   bool use_v4l2_ctl_{true};
   std::string actual_fourcc_;
   cv::VideoCapture capture_;
-  cv::Mat gray_frame_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub_;
   rclcpp::TimerBase::SharedPtr timer_;
@@ -260,7 +237,6 @@ private:
   rclcpp::Time last_camera_info_time_{0, 0, RCL_ROS_TIME};
   int frames_since_log_{0};
   double read_time_sum_{0.0};
-  double convert_time_sum_{0.0};
   double publish_time_sum_{0.0};
 };
 

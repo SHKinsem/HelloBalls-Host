@@ -14,6 +14,7 @@ class RosLaunchConfig:
     package: str = "helloballs_bringup"
     launch_file: str = "camera.launch.py"
     ros_setup: Path = Path("/opt/ros/humble/setup.bash")
+    ros_log_dir: Path = Path("/tmp/ros-log")
     launch_arguments: dict[str, str] = field(default_factory=dict)
 
 
@@ -32,6 +33,7 @@ class RosLaunchProcess:
                 f"ROS2 workspace setup not found: {install_setup}. "
                 "Build the workspace with colcon first."
             )
+        self.config.ros_log_dir.mkdir(parents=True, exist_ok=True)
 
         ros2_args = [
             "exec",
@@ -53,6 +55,7 @@ class RosLaunchProcess:
         self.process = subprocess.Popen(
             ["bash", "-lc", command],
             cwd=workspace,
+            env={**os.environ, "ROS_LOG_DIR": str(self.config.ros_log_dir)},
             start_new_session=True,
         )
 
