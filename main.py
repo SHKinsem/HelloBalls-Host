@@ -6,6 +6,17 @@ from scripts import HelloBalls_Serial
 from scripts.keyboard_control import KeyboardController
 
 
+def default_vins_config_file(ros_workspace: str) -> str:
+    workspace = Path(ros_workspace)
+    workspace_local = Path("src/helloballs_bringup/config/vins_mono_imu.yaml")
+    repo_local = Path("ros2_ws/src/helloballs_bringup/config/vins_mono_imu.yaml")
+    if (workspace / workspace_local).exists():
+        return str(workspace_local)
+    if (workspace / repo_local).exists():
+        return str(repo_local)
+    return "vins_mono_imu.yaml"
+
+
 def main():
     parser = argparse.ArgumentParser(description="HelloBalls RDK host entry point.")
     parser.add_argument("--no-serial", action="store_true", help="Run without opening the MCU UART.")
@@ -49,7 +60,7 @@ def main():
     parser.add_argument("--ros-workspace", default="ros2_ws", help="ROS2 workspace containing install/setup.bash.")
     parser.add_argument("--camera-device", default="/dev/video0")
     parser.add_argument("--camera-width", type=int, default=1280)
-    parser.add_argument("--camera-height", type=int, default=720)
+    parser.add_argument("--camera-height", type=int, default=712)
     parser.add_argument("--camera-fps", type=float, default=30.0)
     parser.add_argument("--camera-fourcc", default="MJPG")
     parser.add_argument("--camera-frame-id", default="camera_link")
@@ -67,7 +78,11 @@ def main():
         action="store_true",
         help="Start helloballs_bringup vins.launch.py alongside this host process.",
     )
-    parser.add_argument("--vins-config-file", default="")
+    parser.add_argument(
+        "--vins-config-file",
+        default=None,
+        help="VINS config file. Defaults to the repository's vins_mono_imu.yaml.",
+    )
     parser.add_argument("--vins-image-topic", default=None)
     parser.add_argument("--vins-imu-topic", default=None)
     parser.add_argument("--vins-package", default="vins")
@@ -87,6 +102,8 @@ def main():
         args.vins_image_topic = args.camera_mono_topic if args.camera_mono_converter else "/camera/image_raw"
     if args.vins_imu_topic is None:
         args.vins_imu_topic = args.imu_topic
+    if args.vins_config_file is None:
+        args.vins_config_file = default_vins_config_file(args.ros_workspace)
 
     if args.no_serial and not (args.ros_camera or args.ros_vins):
         parser.error("Nothing to run: remove --no-serial.")

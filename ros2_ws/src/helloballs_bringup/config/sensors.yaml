@@ -15,8 +15,11 @@ topics:
 camera:
   device: /dev/video0
   width: 1280
-  height: 720
+  height: 712
   fps: 30.0
+  fourcc: ""
+  buffer_size: 1
+  use_v4l2_ctl: false
   encoding_for_vio: mono8
   camera_info_yaml: config/camera_info.example.yaml
 

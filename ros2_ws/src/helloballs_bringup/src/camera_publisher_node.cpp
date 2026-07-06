@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <utility>
 
@@ -76,10 +77,10 @@ public:
     width_ = declare_parameter<int>("camera_width", 1280);
     height_ = declare_parameter<int>("camera_height", 720);
     fps_ = declare_parameter<double>("camera_fps", 30.0);
-    fourcc_ = declare_parameter<std::string>("camera_fourcc", "MJPG");
+    fourcc_ = declare_parameter<std::string>("camera_fourcc", "");
     frame_id_ = declare_parameter<std::string>("camera_frame_id", "camera_link");
-    use_v4l2_ctl_ = declare_parameter<bool>("use_v4l2_ctl", true);
-    buffer_size_ = declare_parameter<int>("camera_buffer_size", 4);
+    use_v4l2_ctl_ = declare_parameter<bool>("use_v4l2_ctl", false);
+    buffer_size_ = declare_parameter<int>("camera_buffer_size", 1);
     camera_info_rate_hz_ = declare_parameter<double>("camera_info_rate_hz", 1.0);
 
     const auto image_topic = declare_parameter<std::string>("image_topic", "/camera/image_raw");
@@ -106,6 +107,7 @@ public:
 private:
   void openCamera()
   {
+    capture_.release();
     if (use_v4l2_ctl_) {
       configureWithV4l2Ctl(device_, width_, height_, fps_, fourcc_);
     }
@@ -125,15 +127,30 @@ private:
       capture_.set(cv::CAP_PROP_BUFFERSIZE, buffer_size_);
     }
 
-    cv::Mat frame;
-    if (!capture_.read(frame) || frame.empty()) {
-      throw std::runtime_error("camera opened but did not return a frame");
-    }
-
     actual_width_ = static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_WIDTH));
     actual_height_ = static_cast<int>(capture_.get(cv::CAP_PROP_FRAME_HEIGHT));
     actual_fps_ = capture_.get(cv::CAP_PROP_FPS);
     actual_fourcc_ = decodeFourcc(capture_.get(cv::CAP_PROP_FOURCC));
+
+    cv::Mat frame;
+    bool got_frame = false;
+    for (int attempt = 1; attempt <= 60; ++attempt) {
+      if (capture_.read(frame) && !frame.empty()) {
+        got_frame = true;
+        break;
+      }
+      if (attempt == 1 || attempt % 10 == 0) {
+        RCLCPP_WARN(
+          get_logger(),
+          "waiting for first camera frame from %s (%d/60)",
+          device_.c_str(),
+          attempt);
+      }
+      std::this_thread::sleep_for(50ms);
+    }
+    if (!got_frame) {
+      throw std::runtime_error("camera opened but did not return a frame after warmup");
+    }
 
     RCLCPP_INFO(
       get_logger(),
@@ -143,6 +160,8 @@ private:
       actual_height_,
       actual_fourcc_.c_str(),
       actual_fps_);
+    consecutive_read_failures_ = 0;
+    reopen_backoff_ms_ = 500;
   }
 
   void publishFrame()
@@ -150,9 +169,30 @@ private:
     const auto read_started_at = std::chrono::steady_clock::now();
     cv::Mat frame;
     if (!capture_.read(frame) || frame.empty()) {
-      RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 2000, "failed to read camera frame");
+      consecutive_read_failures_++;
+      RCLCPP_WARN_THROTTLE(
+        get_logger(),
+        *get_clock(),
+        2000,
+        "failed to read camera frame (%d consecutive failures)",
+        consecutive_read_failures_);
+      if (consecutive_read_failures_ >= 90 && consecutive_read_failures_ % 30 == 0) {
+        RCLCPP_WARN(
+          get_logger(),
+          "reopening camera after repeated read failures; backoff=%dms",
+          reopen_backoff_ms_);
+        std::this_thread::sleep_for(std::chrono::milliseconds(reopen_backoff_ms_));
+        try {
+          openCamera();
+        } catch (const std::exception & error) {
+          RCLCPP_ERROR(get_logger(), "camera reopen failed: %s", error.what());
+          reopen_backoff_ms_ = std::min(reopen_backoff_ms_ * 2, 5000);
+        }
+      }
       return;
     }
+    consecutive_read_failures_ = 0;
+    reopen_backoff_ms_ = 500;
     const auto read_finished_at = std::chrono::steady_clock::now();
 
     auto msg = sensor_msgs::msg::Image();
@@ -221,13 +261,13 @@ private:
   std::string frame_id_;
   int width_{1280};
   int height_{720};
-  int buffer_size_{4};
+  int buffer_size_{1};
   int actual_width_{0};
   int actual_height_{0};
   double fps_{30.0};
   double actual_fps_{0.0};
   double camera_info_rate_hz_{1.0};
-  bool use_v4l2_ctl_{true};
+  bool use_v4l2_ctl_{false};
   std::string actual_fourcc_;
   cv::VideoCapture capture_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
@@ -236,6 +276,8 @@ private:
   rclcpp::Time last_log_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time last_camera_info_time_{0, 0, RCL_ROS_TIME};
   int frames_since_log_{0};
+  int consecutive_read_failures_{0};
+  int reopen_backoff_ms_{500};
   double read_time_sum_{0.0};
   double publish_time_sum_{0.0};
 };

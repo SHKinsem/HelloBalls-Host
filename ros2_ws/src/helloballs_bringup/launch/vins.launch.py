@@ -29,7 +29,7 @@ def generate_launch_description():
                     [
                         FindPackageShare("helloballs_bringup"),
                         "config",
-                        "vins_mono_imu.example.yaml",
+                        "vins_mono_imu.yaml",
                     ]
                 ),
             ),

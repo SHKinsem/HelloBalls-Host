@@ -8,8 +8,8 @@ output_path: /tmp
 imu: 1
 num_of_cam: 1
 image_width: 1280
-image_height: 720
-cam0_calib: helloballs_camera_pinhole.example.yaml
+image_height: 712
+cam0_calib: helloballs_camera_pinhole.yaml
 
 estimate_extrinsic: 1
 # Initial imu/body-to-camera transform. Translation comes from the mechanical
