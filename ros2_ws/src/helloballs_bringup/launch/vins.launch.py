@@ -1,5 +1,6 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
@@ -12,6 +13,8 @@ def generate_launch_description():
     imu_topic = LaunchConfiguration("imu_topic")
     vins_package = LaunchConfiguration("vins_package")
     estimator_executable = LaunchConfiguration("estimator_executable")
+    use_rviz = LaunchConfiguration("use_rviz")
+    rviz_config_file = LaunchConfiguration("rviz_config_file")
 
     static_tf_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -37,6 +40,17 @@ def generate_launch_description():
             DeclareLaunchArgument("imu_topic", default_value="/imu/data_raw"),
             DeclareLaunchArgument("vins_package", default_value="vins"),
             DeclareLaunchArgument("estimator_executable", default_value="vins_node"),
+            DeclareLaunchArgument("use_rviz", default_value="false"),
+            DeclareLaunchArgument(
+                "rviz_config_file",
+                default_value=PathJoinSubstitution(
+                    [
+                        FindPackageShare("helloballs_bringup"),
+                        "config",
+                        "vio_debug.rviz",
+                    ]
+                ),
+            ),
             static_tf_launch,
             Node(
                 package=vins_package,
@@ -50,7 +64,24 @@ def generate_launch_description():
                     ("odometry", "/vio/odometry"),
                     ("path", "/vio/path"),
                     ("imu_propagate", "/vio/imu_propagate"),
+                    ("point_cloud", "/vio/point_cloud"),
+                    ("margin_cloud", "/vio/margin_cloud"),
+                    ("key_poses", "/vio/key_poses"),
+                    ("camera_pose", "/vio/camera_pose"),
+                    ("camera_pose_visual", "/vio/camera_pose_visual"),
+                    ("keyframe_pose", "/vio/keyframe_pose"),
+                    ("keyframe_point", "/vio/keyframe_point"),
+                    ("extrinsic", "/vio/extrinsic"),
+                    ("image_track", "/vio/image_track"),
                 ],
+            ),
+            Node(
+                package="rviz2",
+                executable="rviz2",
+                name="vio_debug_rviz",
+                arguments=["-d", rviz_config_file],
+                condition=IfCondition(use_rviz),
+                output="screen",
             ),
         ]
     )
