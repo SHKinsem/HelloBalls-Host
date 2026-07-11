@@ -3,8 +3,11 @@ project(helloballs_bringup)
 
 find_package(ament_cmake REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(visualization_msgs REQUIRED)
 
 add_executable(camera_publisher_node src/camera_publisher_node.cpp)
 target_compile_features(camera_publisher_node PUBLIC cxx_std_17)
@@ -18,8 +21,22 @@ target_include_directories(grayscale_converter_node PRIVATE ${OpenCV_INCLUDE_DIR
 target_link_libraries(grayscale_converter_node ${OpenCV_LIBRARIES})
 ament_target_dependencies(grayscale_converter_node rclcpp sensor_msgs)
 
+add_executable(court_line_localizer_node src/court_line_localizer_node.cpp)
+target_compile_features(court_line_localizer_node PUBLIC cxx_std_17)
+target_include_directories(court_line_localizer_node PRIVATE ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(court_line_localizer_node ${OpenCV_LIBRARIES})
+ament_target_dependencies(
+  court_line_localizer_node
+  geometry_msgs
+  nav_msgs
+  rclcpp
+  sensor_msgs
+  visualization_msgs
+)
+
 install(TARGETS
   camera_publisher_node
+  court_line_localizer_node
   grayscale_converter_node
   DESTINATION lib/${PROJECT_NAME}
 )

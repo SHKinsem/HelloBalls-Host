@@ -146,6 +146,30 @@ Visualization Manager:
       Name: Court Map Lines
       Queue Size: 10
       Value: true
+    - Class: rviz_default_plugins/PoseWithCovariance
+      Enabled: true
+      Name: Court Pose Measurement
+      Shape:
+        Alpha: 1
+        Axes Length: 0.7
+        Axes Radius: 0.04
+        Color: 255; 180; 0
+        Value: Axes
+      Topic:
+        Value: /court/pose_measurement
+      Value: true
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Image Topic:
+        Value: /court/debug_image
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: Court Debug Image
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Value: true
   Enabled: true
   Global Options:
     Background Color: 20; 20; 24
