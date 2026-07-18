@@ -35,5 +35,20 @@ def generate_launch_description():
                     "imu_link",
                 ],
             ),
+            Node(
+                package="tf2_ros",
+                executable="static_transform_publisher",
+                name="camera_to_optical_tf",
+                arguments=[
+                    "0.0",
+                    "0.0",
+                    "0.0",
+                    "-1.5707963267948966",
+                    "0.0",
+                    "-1.5707963267948966",
+                    "camera_link",
+                    "camera_optical_frame",
+                ],
+            ),
         ]
     )

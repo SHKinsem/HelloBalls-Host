@@ -7,3 +7,7 @@ static_transforms:
     child_frame: imu_link
     translation_xyz_m: [0.07326, -0.063, 0.10659]
     rotation_rpy_rad: [0.0, 0.0, 0.0]
+  - parent_frame: camera_link
+    child_frame: camera_optical_frame
+    translation_xyz_m: [0.0, 0.0, 0.0]
+    rotation_rpy_rad: [-1.5707963267948966, 0.0, -1.5707963267948966]

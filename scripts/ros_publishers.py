@@ -15,6 +15,11 @@ class RosPublisherConfig:
     node_name: str = "helloballs_sensor_publisher"
     imu_topic: str = "/imu/data_raw"
     imu_frame_id: str = "imu_link"
+    # The current IMU reports a stationary acceleration norm of about
+    # 10.80097 m/s^2. Correct it to standard gravity before VINS receives it.
+    # A future six-position calibration can replace this uniform scale with
+    # per-axis scale and bias parameters.
+    imu_accel_scale: float = 0.907942
     imu_angular_velocity_variance: float = 0.0
     imu_linear_acceleration_variance: float = 0.0
 
@@ -22,6 +27,8 @@ class RosPublisherConfig:
 class RosSensorPublisher:
     def __init__(self, config: RosPublisherConfig | None = None) -> None:
         self.config = config or RosPublisherConfig()
+        if not math.isfinite(self.config.imu_accel_scale) or self.config.imu_accel_scale <= 0.0:
+            raise ValueError("imu_accel_scale must be a positive finite value")
         self.rclpy = import_module("rclpy")
         self.imu_msg = import_module("sensor_msgs.msg").Imu
         self.time_msg = import_module("builtin_interfaces.msg").Time
@@ -49,9 +56,10 @@ class RosSensorPublisher:
             imu_msg.linear_acceleration_covariance,
             self.config.imu_linear_acceleration_variance,
         )
-        imu_msg.linear_acceleration.x = acc_x * G_TO_MPS2
-        imu_msg.linear_acceleration.y = acc_y * G_TO_MPS2
-        imu_msg.linear_acceleration.z = acc_z * G_TO_MPS2
+        acc_factor = G_TO_MPS2 * self.config.imu_accel_scale
+        imu_msg.linear_acceleration.x = acc_x * acc_factor
+        imu_msg.linear_acceleration.y = acc_y * acc_factor
+        imu_msg.linear_acceleration.z = acc_z * acc_factor
         imu_msg.angular_velocity.x = gyro_x * DEG_TO_RAD
         imu_msg.angular_velocity.y = gyro_y * DEG_TO_RAD
         imu_msg.angular_velocity.z = gyro_z * DEG_TO_RAD

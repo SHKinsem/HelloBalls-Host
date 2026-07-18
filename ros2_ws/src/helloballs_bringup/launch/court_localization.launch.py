@@ -1,9 +1,66 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
-from launch.conditions import IfCondition
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def _world_to_court_tf(context):
+    """Place VIO's initial world origin at the configured court start pose.
+
+    VINS starts its local `world` frame at the vehicle's initial pose.  The
+    transform below therefore makes that local origin a child of `court`, so
+    RViz can draw `/vio/odometry` on the court map without changing the VIO
+    estimator itself.
+    """
+    enabled = LaunchConfiguration("publish_world_to_court_tf").perform(context)
+    legacy_enabled = LaunchConfiguration("publish_identity_world_to_court_tf").perform(context)
+    if (
+        enabled.lower() not in ("1", "true", "yes", "on") or
+        legacy_enabled.lower() not in ("1", "true", "yes", "on")
+    ):
+        return []
+
+    start_corner = LaunchConfiguration("start_corner").perform(context)
+    court_length = float(LaunchConfiguration("court_length_m").perform(context))
+    court_width = float(LaunchConfiguration("court_width_m").perform(context))
+    start_inset = float(LaunchConfiguration("start_inset_m").perform(context))
+
+    half_length = court_length * 0.5
+    half_width = court_width * 0.5
+    poses = {
+        "near_left": (-half_length + start_inset, half_width - start_inset, 0.0),
+        "near_right": (-half_length + start_inset, -half_width + start_inset, 0.0),
+        "far_left": (half_length - start_inset, half_width - start_inset, 3.141592653589793),
+        "far_right": (half_length - start_inset, -half_width + start_inset, 3.141592653589793),
+    }
+    if start_corner == "unknown":
+        x, y, yaw = 0.0, 0.0, 0.0
+    elif start_corner in poses:
+        x, y, yaw = poses[start_corner]
+    else:
+        raise RuntimeError(
+            "start_corner must be unknown, near_left, near_right, far_left, or far_right"
+        )
+
+    return [
+        Node(
+            package="tf2_ros",
+            executable="static_transform_publisher",
+            name="court_to_vio_world_tf",
+            arguments=[
+                "--x", str(x),
+                "--y", str(y),
+                "--z", "0",
+                "--roll", "0",
+                "--pitch", "0",
+                "--yaw", str(yaw),
+                "--frame-id", LaunchConfiguration("court_frame").perform(context),
+                "--child-frame-id", LaunchConfiguration("world_frame").perform(context),
+            ],
+            output="screen",
+        )
+    ]
 
 
 def generate_launch_description():
@@ -13,8 +70,8 @@ def generate_launch_description():
     world_frame = LaunchConfiguration("world_frame")
     base_frame = LaunchConfiguration("base_frame")
     court_frame = LaunchConfiguration("court_frame")
-    publish_identity_world_to_court_tf = LaunchConfiguration("publish_identity_world_to_court_tf")
     start_corner = LaunchConfiguration("start_corner")
+    start_inset_m = LaunchConfiguration("start_inset_m")
     camera_height_m = LaunchConfiguration("camera_height_m")
     camera_pitch_rad = LaunchConfiguration("camera_pitch_rad")
     court_length_m = LaunchConfiguration("court_length_m")
@@ -30,8 +87,15 @@ def generate_launch_description():
             DeclareLaunchArgument("world_frame", default_value="world"),
             DeclareLaunchArgument("base_frame", default_value="base_link"),
             DeclareLaunchArgument("court_frame", default_value="court"),
+            DeclareLaunchArgument("publish_world_to_court_tf", default_value="true"),
+            # Retain the previous argument as a disable-only compatibility alias.
             DeclareLaunchArgument("publish_identity_world_to_court_tf", default_value="true"),
             DeclareLaunchArgument("start_corner", default_value="unknown"),
+            DeclareLaunchArgument(
+                "start_inset_m",
+                default_value="0.75",
+                description="Distance from the specified court corner to the base_link start pose.",
+            ),
             DeclareLaunchArgument("camera_height_m", default_value="0.14214"),
             DeclareLaunchArgument("camera_pitch_rad", default_value="0.0"),
             DeclareLaunchArgument("court_length_m", default_value="23.77"),
@@ -51,6 +115,7 @@ def generate_launch_description():
                         "base_frame": base_frame,
                         "court_frame": court_frame,
                         "start_corner": start_corner,
+                        "corner_inset_m": ParameterValue(start_inset_m, value_type=float),
                         "camera_height_m": ParameterValue(camera_height_m, value_type=float),
                         "camera_pitch_rad": ParameterValue(camera_pitch_rad, value_type=float),
                         "court_length_m": ParameterValue(court_length_m, value_type=float),
@@ -63,30 +128,6 @@ def generate_launch_description():
                     }
                 ],
             ),
-            Node(
-                package="tf2_ros",
-                executable="static_transform_publisher",
-                name="world_to_court_tf",
-                arguments=[
-                    "--x",
-                    "0",
-                    "--y",
-                    "0",
-                    "--z",
-                    "0",
-                    "--roll",
-                    "0",
-                    "--pitch",
-                    "0",
-                    "--yaw",
-                    "0",
-                    "--frame-id",
-                    world_frame,
-                    "--child-frame-id",
-                    court_frame,
-                ],
-                condition=IfCondition(publish_identity_world_to_court_tf),
-                output="screen",
-            ),
+            OpaqueFunction(function=_world_to_court_tf),
         ]
     )

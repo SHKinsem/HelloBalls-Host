@@ -6,6 +6,7 @@
 frames:
   base_frame: base_link
   camera_frame: camera_link
+  camera_optical_frame: camera_optical_frame
   imu_frame: imu_link
 
 base_link_T_camera_link:
@@ -38,16 +39,16 @@ base_link_T_imu_link:
        0.0, 0.0, 1.0, 0.10659,
        0.0, 0.0, 0.0, 1.0]
 
-# Initial VINS body_T_cam0 assuming imu_link axes are aligned with base_link.
-# Revisit the rotation matrix after IMU and camera axis tests.
+# VINS body_T_cam0. IMU samples are body aligned, while the camera model uses
+# optical axes (x right, y down, z forward).
 vins_body_T_cam0:
   body_frame: imu_link
-  camera_frame: camera_link
+  camera_frame: camera_optical_frame
   transform_matrix:
     rows: 4
     cols: 4
     data:
-      [1.0, 0.0, 0.0, 0.16342,
-       0.0, 1.0, 0.0, 0.063,
-       0.0, 0.0, 1.0, 0.03555,
+      [0.0, 0.0, 1.0, 0.16342,
+       -1.0, 0.0, 0.0, 0.063,
+       0.0, -1.0, 0.0, 0.03555,
        0.0, 0.0, 0.0, 1.0]

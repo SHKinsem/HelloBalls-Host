@@ -74,11 +74,11 @@ public:
   : Node("helloballs_camera_publisher")
   {
     device_ = declare_parameter<std::string>("camera_device", "/dev/video0");
-    width_ = declare_parameter<int>("camera_width", 1280);
-    height_ = declare_parameter<int>("camera_height", 720);
-    fps_ = declare_parameter<double>("camera_fps", 30.0);
-    fourcc_ = declare_parameter<std::string>("camera_fourcc", "");
-    frame_id_ = declare_parameter<std::string>("camera_frame_id", "camera_link");
+    width_ = declare_parameter<int>("camera_width", 800);
+    height_ = declare_parameter<int>("camera_height", 592);
+    fps_ = declare_parameter<double>("camera_fps", 15.0);
+    fourcc_ = declare_parameter<std::string>("camera_fourcc", "MJPG");
+    frame_id_ = declare_parameter<std::string>("camera_frame_id", "camera_optical_frame");
     use_v4l2_ctl_ = declare_parameter<bool>("use_v4l2_ctl", false);
     buffer_size_ = declare_parameter<int>("camera_buffer_size", 1);
     camera_info_rate_hz_ = declare_parameter<double>("camera_info_rate_hz", 1.0);
@@ -259,12 +259,12 @@ private:
   std::string device_;
   std::string fourcc_;
   std::string frame_id_;
-  int width_{1280};
-  int height_{720};
+  int width_{800};
+  int height_{592};
   int buffer_size_{1};
   int actual_width_{0};
   int actual_height_{0};
-  double fps_{30.0};
+  double fps_{15.0};
   double actual_fps_{0.0};
   double camera_info_rate_hz_{1.0};
   bool use_v4l2_ctl_{false};

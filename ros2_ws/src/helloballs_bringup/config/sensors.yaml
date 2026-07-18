@@ -1,6 +1,6 @@
 frames:
   base: base_link
-  camera: camera_link
+  camera: camera_optical_frame
   imu: imu_link
 
 topics:
@@ -14,10 +14,10 @@ topics:
 
 camera:
   device: /dev/video0
-  width: 1280
-  height: 712
-  fps: 30.0
-  fourcc: ""
+  width: 800
+  height: 592
+  fps: 15.0
+  fourcc: "MJPG"
   buffer_size: 1
   use_v4l2_ctl: false
   encoding_for_vio: mono8

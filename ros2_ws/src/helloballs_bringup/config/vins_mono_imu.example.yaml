@@ -7,21 +7,20 @@ output_path: /tmp
 
 imu: 1
 num_of_cam: 1
-image_width: 1280
-image_height: 720
+image_width: 800
+image_height: 592
 cam0_calib: helloballs_camera_pinhole.example.yaml
 
-estimate_extrinsic: 1
-# Initial imu/body-to-camera transform. Translation comes from the mechanical
-# camera1 position minus the approximate IMU position, assuming imu_link axes
-# are aligned with base_link. Verify the rotation before trusting VIO output.
+estimate_extrinsic: 0
+# imu_link/body uses vehicle axes (x forward, y left, z up), while the camera
+# model uses optical axes (x right, y down, z forward).
 body_T_cam0:
    rows: 4
    cols: 4
    dt: d
-   data: [1.0, 0.0, 0.0, 0.16342,
-          0.0, 1.0, 0.0, 0.063,
-          0.0, 0.0, 1.0, 0.03555,
+   data: [0.0, 0.0, 1.0, 0.16342,
+          -1.0, 0.0, 0.0, 0.063,
+          0.0, -1.0, 0.0, 0.03555,
           0.0, 0.0, 0.0, 1.0]
 
 acc_n: 0.0
@@ -30,7 +29,7 @@ acc_w: 0.0
 gyr_w: 0.0
 g_norm: 9.80665
 
-estimate_td: 1
+estimate_td: 0
 td: 0.0
 
 max_cnt: 150

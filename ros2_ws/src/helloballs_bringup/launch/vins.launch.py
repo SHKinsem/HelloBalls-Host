@@ -45,9 +45,9 @@ def generate_launch_description():
                 "rviz_config_file",
                 default_value=PathJoinSubstitution(
                     [
-                        FindPackageShare("helloballs_bringup"),
+                        FindPackageShare("vins"),
                         "config",
-                        "vio_debug.rviz",
+                        "vins_rviz_config.rviz",
                     ]
                 ),
             ),
@@ -57,6 +57,11 @@ def generate_launch_description():
                 executable=estimator_executable,
                 name="vins_estimator",
                 output="screen",
+                # The estimator keeps only a bounded image backlog, but an
+                # occasional device or library failure should not leave VIO
+                # permanently unavailable for the rest of a mission.
+                respawn=True,
+                respawn_delay=2.0,
                 parameters=[{"config_file": config_file}],
                 remappings=[
                     ("/camera/image_raw", image_topic),

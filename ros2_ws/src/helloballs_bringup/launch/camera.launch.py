@@ -22,11 +22,11 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("camera_device", default_value="/dev/video0"),
-            DeclareLaunchArgument("camera_width", default_value="1280"),
-            DeclareLaunchArgument("camera_height", default_value="712"),
-            DeclareLaunchArgument("camera_fps", default_value="30.0"),
-            DeclareLaunchArgument("camera_fourcc", default_value=""),
-            DeclareLaunchArgument("camera_frame_id", default_value="camera_link"),
+            DeclareLaunchArgument("camera_width", default_value="800"),
+            DeclareLaunchArgument("camera_height", default_value="592"),
+            DeclareLaunchArgument("camera_fps", default_value="15.0"),
+            DeclareLaunchArgument("camera_fourcc", default_value="MJPG"),
+            DeclareLaunchArgument("camera_frame_id", default_value="camera_optical_frame"),
             DeclareLaunchArgument("camera_buffer_size", default_value="1"),
             DeclareLaunchArgument("use_v4l2_ctl", default_value="false"),
             DeclareLaunchArgument("camera_info_rate_hz", default_value="1.0"),
