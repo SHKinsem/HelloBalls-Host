@@ -22,6 +22,70 @@ class RosPublisherConfig:
     imu_accel_scale: float = 0.907942
     imu_angular_velocity_variance: float = 0.0
     imu_linear_acceleration_variance: float = 0.0
+    allow_legacy_imu_timestamps: bool = False
+
+
+class McuClockSynchronizer:
+    """Map an MCU monotonic sampling clock onto the host Unix time axis."""
+
+    def __init__(self) -> None:
+        self._anchor_sample_time_us: int | None = None
+        self._anchor_host_time: float | None = None
+        self._last_sample_time_us: int | None = None
+        self._last_sequence: int | None = None
+        self._last_host_time: float | None = None
+
+    def to_host_time(
+        self,
+        sample_time_us: int,
+        sample_sequence: int,
+        received_at: float,
+    ) -> float:
+        if sample_time_us < 0:
+            raise ValueError("MCU sample_time_us must be non-negative")
+        if not 0 <= sample_sequence <= 0xFFFFFFFF:
+            raise ValueError("MCU sample_sequence must fit uint32")
+        if not math.isfinite(received_at) or received_at <= 0.0:
+            raise ValueError("Host receive time must be a positive finite Unix time")
+
+        if self._anchor_sample_time_us is None:
+            self._reset_anchor(sample_time_us, received_at)
+        else:
+            assert self._last_sample_time_us is not None
+            assert self._last_sequence is not None
+            timestamp_regressed = sample_time_us <= self._last_sample_time_us
+            sequence_delta = (sample_sequence - self._last_sequence) & 0xFFFFFFFF
+            sequence_regressed = sequence_delta >= 0x80000000
+
+            if timestamp_regressed and sequence_regressed:
+                # Both MCU counters moving backwards indicates an MCU reboot.
+                anchor_host_time = received_at
+                if self._last_host_time is not None:
+                    anchor_host_time = max(anchor_host_time, self._last_host_time + 1e-6)
+                self._reset_anchor(sample_time_us, anchor_host_time)
+            elif timestamp_regressed:
+                raise ValueError("duplicate or out-of-order MCU sample timestamp")
+            elif sequence_delta == 0 or sequence_regressed:
+                raise ValueError("duplicate or out-of-order MCU sample sequence")
+
+        assert self._anchor_sample_time_us is not None
+        assert self._anchor_host_time is not None
+        host_time = self._anchor_host_time + (
+            sample_time_us - self._anchor_sample_time_us
+        ) / 1_000_000.0
+        if self._last_host_time is not None and host_time <= self._last_host_time:
+            raise ValueError("reconstructed IMU timestamp is not strictly increasing")
+
+        self._last_sample_time_us = sample_time_us
+        self._last_sequence = sample_sequence
+        self._last_host_time = host_time
+        return host_time
+
+    def _reset_anchor(self, sample_time_us: int, host_time: float) -> None:
+        self._anchor_sample_time_us = sample_time_us
+        self._anchor_host_time = host_time
+        self._last_sample_time_us = None
+        self._last_sequence = None
 
 
 class RosSensorPublisher:
@@ -38,9 +102,33 @@ class RosSensorPublisher:
         self.node = self.rclpy.create_node(self.config.node_name)
         sensor_qos = qos.qos_profile_sensor_data
         self.imu_pub = self.node.create_publisher(self.imu_msg, self.config.imu_topic, sensor_qos)
+        self._mcu_clock = McuClockSynchronizer()
+        self._legacy_warning_emitted = False
 
-    def publish_imu(self, state: ImuState) -> None:
-        stamp = _stamp_from_unix_time(state.received_at, self.time_msg)
+    def publish_imu(self, state: ImuState) -> bool:
+        if state.sample_time_us is not None and state.sample_sequence is not None:
+            try:
+                timestamp = self._mcu_clock.to_host_time(
+                    state.sample_time_us,
+                    state.sample_sequence,
+                    state.received_at,
+                )
+            except ValueError as error:
+                self.node.get_logger().warning(f"Dropping invalid IMU v2 frame: {error}")
+                return False
+        elif self.config.allow_legacy_imu_timestamps:
+            timestamp = state.received_at
+        else:
+            if not self._legacy_warning_emitted:
+                self.node.get_logger().error(
+                    "Dropping legacy IMU frames without MCU sample timestamps. "
+                    "Upgrade the MCU to IMU protocol v2 or explicitly pass "
+                    "--allow-legacy-imu-timestamps for temporary diagnostics."
+                )
+                self._legacy_warning_emitted = True
+            return False
+
+        stamp = _stamp_from_unix_time(timestamp, self.time_msg)
         acc_x, acc_y, acc_z = _remap_imu_raw_to_base(state.acc_g)
         gyro_x, gyro_y, gyro_z = _remap_imu_raw_to_base(state.gyro_dps)
 
@@ -64,6 +152,7 @@ class RosSensorPublisher:
         imu_msg.angular_velocity.y = gyro_y * DEG_TO_RAD
         imu_msg.angular_velocity.z = gyro_z * DEG_TO_RAD
         self.imu_pub.publish(imu_msg)
+        return True
 
     def spin_once(self) -> None:
         self.rclpy.spin_once(self.node, timeout_sec=0.0)

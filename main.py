@@ -38,6 +38,14 @@ def main():
     parser.add_argument("--imu-topic", default="/imu/data_raw")
     parser.add_argument("--imu-frame-id", default="imu_link")
     parser.add_argument(
+        "--allow-legacy-imu-timestamps",
+        action="store_true",
+        help=(
+            "Temporarily publish legacy IMU v1 frames using UART receive time. "
+            "This produces incorrect bursty timing and is unsuitable for VINS."
+        ),
+    )
+    parser.add_argument(
         "--imu-angular-velocity-variance",
         type=float,
         default=0.0,
@@ -49,9 +57,24 @@ def main():
         default=0.0,
         help="Diagonal linear acceleration covariance variance in (m/s^2)^2.",
     )
+    parser.add_argument(
+        "--imu-accel-scale",
+        type=float,
+        default=0.907942,
+        help=(
+            "Uniform accelerometer scale applied after conversion to m/s^2. "
+            "The default corrects the measured stationary norm 10.80097 to 9.80665."
+        ),
+    )
     parser.add_argument("--keyboard-control", action="store_true", help="Enable keyboard driving over the MCU UART.")
     parser.add_argument("--keyboard-speed", type=int, default=100, help="Motor speed used by keyboard control.")
     parser.add_argument("--keyboard-state", type=int, default=1, help="MCU state value used for keyboard motor commands.")
+    parser.add_argument(
+        "--keyboard-timeout",
+        type=float,
+        default=0.15,
+        help="Stop unless another movement key arrives within this many seconds.",
+    )
     parser.add_argument(
         "--ros-camera",
         action="store_true",
@@ -59,18 +82,18 @@ def main():
     )
     parser.add_argument("--ros-workspace", default="ros2_ws", help="ROS2 workspace containing install/setup.bash.")
     parser.add_argument("--camera-device", default="/dev/video0")
-    parser.add_argument("--camera-width", type=int, default=1280)
-    parser.add_argument("--camera-height", type=int, default=712)
-    parser.add_argument("--camera-fps", type=float, default=30.0)
+    parser.add_argument("--camera-width", type=int, default=800)
+    parser.add_argument("--camera-height", type=int, default=592)
+    parser.add_argument("--camera-fps", type=float, default=15.0)
     parser.add_argument("--camera-fourcc", default="MJPG")
-    parser.add_argument("--camera-frame-id", default="camera_link")
+    parser.add_argument("--camera-frame-id", default="camera_optical_frame")
     parser.add_argument(
         "--camera-mono-converter",
         action="store_true",
         help="Start a backend ROS2 node that converts /camera/image_raw to mono8.",
     )
     parser.add_argument("--camera-mono-topic", default="/camera/image_mono")
-    parser.add_argument("--camera-buffer-size", type=int, default=4)
+    parser.add_argument("--camera-buffer-size", type=int, default=1)
     parser.add_argument("--no-v4l2-ctl", action="store_true", help="Do not let camera launch run v4l2-ctl.")
     parser.add_argument("--camera-info-rate-hz", type=float, default=1.0)
     parser.add_argument(
@@ -173,11 +196,18 @@ def main():
                     node_name=args.ros_node_name,
                     imu_topic=args.imu_topic,
                     imu_frame_id=args.imu_frame_id,
+                    imu_accel_scale=args.imu_accel_scale,
                     imu_angular_velocity_variance=args.imu_angular_velocity_variance,
                     imu_linear_acceleration_variance=args.imu_linear_acceleration_variance,
+                    allow_legacy_imu_timestamps=args.allow_legacy_imu_timestamps,
                 )
             )
-            print(f"ROS2 IMU publisher started: {args.imu_topic}.")
+            imu_timestamp_mode = (
+                "legacy UART receive timestamps allowed (diagnostics only)"
+                if args.allow_legacy_imu_timestamps
+                else "MCU-timestamped IMU v2 required"
+            )
+            print(f"ROS2 IMU publisher started: {args.imu_topic} ({imu_timestamp_mode}).")
 
         if not args.no_serial:
             imu_callback = ros_publisher.publish_imu if ros_publisher is not None else None
@@ -194,6 +224,7 @@ def main():
                     serial_receiver=receiver,
                     speed=args.keyboard_speed,
                     state=args.keyboard_state,
+                    key_timeout=args.keyboard_timeout,
                 )
                 keyboard_controller.start()
 

@@ -14,9 +14,18 @@ except ImportError:  # pragma: no cover - handled when opening the port.
 
 
 HEADER = b"\xAA\x55"
-MSG_TYPE_IMU = 0x01
-PAYLOAD_LEN = 22
-FRAME_LEN = 27
+MSG_TYPE_IMU_LEGACY = 0x01
+MSG_TYPE_IMU_V2 = 0x02
+IMU_LEGACY_PAYLOAD_LEN = 22
+IMU_V2_PAYLOAD_LEN = 34
+FRAME_OVERHEAD_LEN = 5
+
+_IMU_LEGACY_STRUCT = struct.Struct(">BBiihhhhhh")
+_IMU_V2_STRUCT = struct.Struct(">BBiihhhhhhIQ")
+_SUPPORTED_PAYLOAD_LENGTHS = {
+    MSG_TYPE_IMU_LEGACY: IMU_LEGACY_PAYLOAD_LEN,
+    MSG_TYPE_IMU_V2: IMU_V2_PAYLOAD_LEN,
+}
 
 ACC_RAW_PER_G = 32768.0 / 4.0
 GYRO_RAW_PER_DPS = 32768.0 / 512.0
@@ -35,6 +44,9 @@ class ImuState:
     gyr_y: int
     gyr_z: int
     received_at: float = 0.0
+    protocol_version: int = 1
+    sample_sequence: Optional[int] = None
+    sample_time_us: Optional[int] = None
 
     @property
     def acc_g(self) -> tuple[float, float, float]:
@@ -57,10 +69,24 @@ def checksum(frame_without_header_and_checksum: bytes) -> int:
     return sum(frame_without_header_and_checksum) & 0xFF
 
 
-def parse_payload(payload: bytes, received_at: Optional[float] = None) -> ImuState:
-    if len(payload) != PAYLOAD_LEN:
+def parse_payload(
+    payload: bytes,
+    received_at: Optional[float] = None,
+    protocol_version: int = 1,
+) -> ImuState:
+    if protocol_version == 1:
+        expected_length = IMU_LEGACY_PAYLOAD_LEN
+        payload_struct = _IMU_LEGACY_STRUCT
+    elif protocol_version == 2:
+        expected_length = IMU_V2_PAYLOAD_LEN
+        payload_struct = _IMU_V2_STRUCT
+    else:
+        raise ValueError(f"Unsupported IMU protocol version: {protocol_version}")
+
+    if len(payload) != expected_length:
         raise ValueError(f"Invalid payload length: {len(payload)}")
 
+    unpacked = payload_struct.unpack(payload)
     (
         mcu_state,
         host_state,
@@ -72,7 +98,9 @@ def parse_payload(payload: bytes, received_at: Optional[float] = None) -> ImuSta
         gyr_x,
         gyr_y,
         gyr_z,
-    ) = struct.unpack(">BBiihhhhhh", payload)
+    ) = unpacked[:10]
+    sample_sequence = unpacked[10] if protocol_version == 2 else None
+    sample_time_us = unpacked[11] if protocol_version == 2 else None
 
     return ImuState(
         mcu_state=mcu_state,
@@ -86,18 +114,22 @@ def parse_payload(payload: bytes, received_at: Optional[float] = None) -> ImuSta
         gyr_y=gyr_y,
         gyr_z=gyr_z,
         received_at=time.time() if received_at is None else received_at,
+        protocol_version=protocol_version,
+        sample_sequence=sample_sequence,
+        sample_time_us=sample_time_us,
     )
 
 
 def try_parse_frame(frame: bytes, received_at: Optional[float] = None) -> Optional[ImuState]:
-    if len(frame) != FRAME_LEN:
-        return None
-    if frame[:2] != HEADER:
+    if len(frame) < FRAME_OVERHEAD_LEN or frame[:2] != HEADER:
         return None
 
     msg_type = frame[2]
     payload_len = frame[3]
-    if msg_type != MSG_TYPE_IMU or payload_len != PAYLOAD_LEN:
+    expected_payload_len = _SUPPORTED_PAYLOAD_LENGTHS.get(msg_type)
+    if expected_payload_len is None or payload_len != expected_payload_len:
+        return None
+    if len(frame) != payload_len + FRAME_OVERHEAD_LEN:
         return None
 
     payload_end = 4 + payload_len
@@ -108,7 +140,12 @@ def try_parse_frame(frame: bytes, received_at: Optional[float] = None) -> Option
     if received_checksum != expected_checksum:
         return None
 
-    return parse_payload(payload, received_at=received_at)
+    protocol_version = 2 if msg_type == MSG_TYPE_IMU_V2 else 1
+    return parse_payload(
+        payload,
+        received_at=received_at,
+        protocol_version=protocol_version,
+    )
 
 
 class FrameParser:
@@ -127,14 +164,25 @@ class FrameParser:
                 break
             if header_index > 0:
                 del self._buffer[:header_index]
-            if len(self._buffer) < FRAME_LEN:
+            if len(self._buffer) < 4:
                 break
 
-            candidate = bytes(self._buffer[:FRAME_LEN])
+            msg_type = self._buffer[2]
+            payload_len = self._buffer[3]
+            expected_payload_len = _SUPPORTED_PAYLOAD_LENGTHS.get(msg_type)
+            if expected_payload_len is None or payload_len != expected_payload_len:
+                del self._buffer[0]
+                continue
+
+            frame_len = payload_len + FRAME_OVERHEAD_LEN
+            if len(self._buffer) < frame_len:
+                break
+
+            candidate = bytes(self._buffer[:frame_len])
             parsed = try_parse_frame(candidate)
             if parsed is not None:
                 frames.append(parsed)
-                del self._buffer[:FRAME_LEN]
+                del self._buffer[:frame_len]
                 continue
 
             del self._buffer[0]
@@ -263,6 +311,8 @@ def format_state(state: ImuState) -> str:
     acc_g = state.acc_g
     gyro_dps = state.gyro_dps
     return (
+        f"protocol=v{state.protocol_version} seq={state.sample_sequence} "
+        f"sample_time_us={state.sample_time_us} "
         f"mcu={state.mcu_state} host={state.host_state} "
         f"wheel=({state.wheel1_distance}, {state.wheel2_distance}) "
         f"acc_raw=({state.acc_x}, {state.acc_y}, {state.acc_z}) "
