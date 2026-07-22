@@ -17,6 +17,34 @@ def default_vins_config_file(ros_workspace: str) -> str:
     return "vins_mono_imu.yaml"
 
 
+def close_resources(
+    keyboard_controller,
+    receiver,
+    ros_publisher,
+    managed_launches,
+) -> None:
+    """Close every started resource even if an earlier close operation fails."""
+    resources = []
+    if keyboard_controller is not None:
+        resources.append(("keyboard controller", keyboard_controller))
+    if receiver is not None:
+        resources.append(("serial receiver", receiver))
+    resources.extend(
+        (f"ROS2 {launch_name}", launch_process)
+        for launch_name, launch_process in reversed(managed_launches)
+    )
+    if ros_publisher is not None:
+        resources.append(("ROS2 IMU publisher", ros_publisher))
+
+    for resource_name, resource in resources:
+        try:
+            resource.close()
+        except Exception as error:
+            # Cleanup must continue so a failure in the local rclpy context
+            # cannot leave camera or VINS launch processes running.
+            print(f"Warning: failed to close {resource_name}: {error}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="HelloBalls RDK host entry point.")
     parser.add_argument("--no-serial", action="store_true", help="Run without opening the MCU UART.")
@@ -249,14 +277,12 @@ def main():
         print(f"\nStopping HelloBalls host: {error}")
         raise SystemExit(1) from error
     finally:
-        if keyboard_controller is not None:
-            keyboard_controller.close()
-        if receiver is not None:
-            receiver.close()
-        if ros_publisher is not None:
-            ros_publisher.close()
-        for _, launch_process in reversed(managed_launches):
-            launch_process.close()
+        close_resources(
+            keyboard_controller,
+            receiver,
+            ros_publisher,
+            managed_launches,
+        )
 
 
 if __name__ == "__main__":

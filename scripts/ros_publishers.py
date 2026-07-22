@@ -159,7 +159,10 @@ class RosSensorPublisher:
 
     def close(self) -> None:
         self.node.destroy_node()
-        self.rclpy.shutdown()
+        # rclpy's default SIGINT handler may already have shut the context down
+        # before main.py reaches its cleanup block.  Keep close() idempotent so
+        # Ctrl+C does not abort the rest of the process cleanup.
+        self.rclpy.try_shutdown()
 
 
 def _remap_imu_raw_to_base(values: tuple[float, float, float]) -> tuple[float, float, float]:
