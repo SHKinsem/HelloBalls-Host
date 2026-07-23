@@ -7,6 +7,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 find_package(visualization_msgs REQUIRED)
 
 add_executable(camera_publisher_node src/camera_publisher_node.cpp)
@@ -34,9 +35,20 @@ ament_target_dependencies(
   visualization_msgs
 )
 
+add_executable(court_vio_fusion_node src/court_vio_fusion_node.cpp)
+target_compile_features(court_vio_fusion_node PUBLIC cxx_std_17)
+ament_target_dependencies(
+  court_vio_fusion_node
+  geometry_msgs
+  nav_msgs
+  rclcpp
+  tf2_ros
+)
+
 install(TARGETS
   camera_publisher_node
   court_line_localizer_node
+  court_vio_fusion_node
   grayscale_converter_node
   DESTINATION lib/${PROJECT_NAME}
 )

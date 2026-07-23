@@ -115,7 +115,7 @@ public:
     vio_odom_topic_ = declare_parameter<std::string>("vio_odom_topic", "/vio/odometry");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
     court_frame_ = declare_parameter<std::string>("court_frame", "court");
-    start_corner_ = declare_parameter<std::string>("start_corner", "unknown");
+    start_side_ = declare_parameter<std::string>("start_side", "unknown");
     camera_height_m_ = declare_parameter<double>("camera_height_m", 0.14214);
     camera_pitch_rad_ = declare_parameter<double>("camera_pitch_rad", 0.0);
     court_length_m_ = declare_parameter<double>("court_length_m", 23.77);
@@ -136,7 +136,22 @@ public:
     search_xy_step_m_ = declare_parameter<double>("search_xy_step_m", 0.25);
     search_yaw_range_rad_ = declare_parameter<double>("search_yaw_range_rad", 0.70);
     search_yaw_step_rad_ = declare_parameter<double>("search_yaw_step_rad", 0.0872664626);
-    corner_inset_m_ = declare_parameter<double>("corner_inset_m", 0.75);
+    initial_side_min_v_fraction_ =
+      declare_parameter<double>("initial_side_min_v_fraction", 0.65);
+    initial_side_max_angle_rad_ =
+      declare_parameter<double>("initial_side_max_angle_rad", 0.2617993878);
+    initial_side_min_length_px_ =
+      declare_parameter<double>("initial_side_min_length_px", 120.0);
+    initial_side_min_confidence_ =
+      declare_parameter<double>("initial_side_min_confidence", 0.35);
+    initial_side_required_frames_ =
+      declare_parameter<int>("initial_side_required_frames", 3);
+    match_doubles_sidelines_ =
+      declare_parameter<bool>("match_doubles_sidelines", true);
+    full_map_min_vio_translation_m_ =
+      declare_parameter<double>("full_map_min_vio_translation_m", 0.5);
+    full_map_min_vio_rotation_rad_ =
+      declare_parameter<double>("full_map_min_vio_rotation_rad", 0.35);
 
     validateParameters();
     rebuildCourtMap();
@@ -167,22 +182,22 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "court line localizer listening image=%s camera_info=%s vio=%s start_corner=%s",
+      "court line localizer listening image=%s camera_info=%s vio=%s start_side=%s",
       image_topic_.c_str(),
       camera_info_topic_.c_str(),
       vio_odom_topic_.c_str(),
-      start_corner_.c_str());
+      start_side_.c_str());
   }
 
 private:
   void validateParameters()
   {
     if (
-      start_corner_ != "unknown" && start_corner_ != "near_left" &&
-      start_corner_ != "near_right" && start_corner_ != "far_left" &&
-      start_corner_ != "far_right")
+      start_side_ != "unknown" && start_side_ != "sideline_left" &&
+      start_side_ != "sideline_right")
     {
-      throw std::runtime_error("start_corner must be unknown, near_left, near_right, far_left, or far_right");
+      throw std::runtime_error(
+              "start_side must be unknown, sideline_left, or sideline_right");
     }
     adaptive_block_size_ = std::max(3, adaptive_block_size_ | 1);
     roi_start_fraction_ = std::clamp(roi_start_fraction_, 0.0, 0.9);
@@ -190,18 +205,30 @@ private:
     search_xy_step_m_ = std::max(0.05, search_xy_step_m_);
     search_yaw_step_rad_ = std::max(0.01, search_yaw_step_rad_);
     camera_height_m_ = std::max(0.01, camera_height_m_);
+    initial_side_min_v_fraction_ = std::clamp(initial_side_min_v_fraction_, 0.5, 0.9);
+    initial_side_max_angle_rad_ = std::clamp(initial_side_max_angle_rad_, 0.05, 0.7);
+    initial_side_min_length_px_ = std::max(20.0, initial_side_min_length_px_);
+    initial_side_min_confidence_ = std::clamp(initial_side_min_confidence_, 0.05, 1.0);
+    initial_side_required_frames_ = std::max(1, initial_side_required_frames_);
+    full_map_min_vio_translation_m_ = std::max(0.0, full_map_min_vio_translation_m_);
+    full_map_min_vio_rotation_rad_ = std::max(0.0, full_map_min_vio_rotation_rad_);
   }
 
   void rebuildCourtMap()
   {
     court_lines_.clear();
+    matching_lines_.clear();
     const double half_length = court_length_m_ * 0.5;
     const double half_width = court_width_m_ * 0.5;
     const double half_singles = singles_width_m_ * 0.5;
     const double service_x = service_line_distance_from_net_m_;
 
-    addLine(-half_length, -half_width, half_length, -half_width);
-    addLine(-half_length, half_width, half_length, half_width);
+    addLine(
+      -half_length, -half_width, half_length, -half_width,
+      match_doubles_sidelines_);
+    addLine(
+      -half_length, half_width, half_length, half_width,
+      match_doubles_sidelines_);
     addLine(-half_length, -half_width, -half_length, half_width);
     addLine(half_length, -half_width, half_length, half_width);
     addLine(-half_length, -half_singles, half_length, -half_singles);
@@ -210,53 +237,62 @@ private:
     addLine(service_x, -half_singles, service_x, half_singles);
     addLine(-service_x, 0.0, service_x, 0.0);
     addLine(0.0, -half_width, 0.0, half_width);
+
+    initial_matching_lines_left_ = {
+      {{-half_length, -half_width}, {-half_length, half_width}},
+      {{-half_length, half_singles}, {half_length, half_singles}},
+    };
+    initial_matching_lines_right_ = {
+      {{-half_length, -half_width}, {-half_length, half_width}},
+      {{-half_length, -half_singles}, {half_length, -half_singles}},
+    };
   }
 
-  void addLine(double ax, double ay, double bx, double by)
+  void addLine(
+    double ax,
+    double ay,
+    double bx,
+    double by,
+    bool use_for_matching = true)
   {
-    court_lines_.push_back({{ax, ay}, {bx, by}});
+    const Line2 line{{ax, ay}, {bx, by}};
+    court_lines_.push_back(line);
+    if (use_for_matching) {
+      matching_lines_.push_back(line);
+    }
   }
 
   void resetCandidates()
   {
     candidates_.clear();
-    if (start_corner_ == "unknown" || start_corner_ == "near_left") {
-      candidates_.push_back(makeCornerCandidate("near_left"));
+    if (start_side_ == "unknown" || start_side_ == "sideline_left") {
+      candidates_.push_back(makeStartCandidate("sideline_left"));
     }
-    if (start_corner_ == "unknown" || start_corner_ == "near_right") {
-      candidates_.push_back(makeCornerCandidate("near_right"));
-    }
-    if (start_corner_ == "unknown" || start_corner_ == "far_left") {
-      candidates_.push_back(makeCornerCandidate("far_left"));
-    }
-    if (start_corner_ == "unknown" || start_corner_ == "far_right") {
-      candidates_.push_back(makeCornerCandidate("far_right"));
+    if (start_side_ == "unknown" || start_side_ == "sideline_right") {
+      candidates_.push_back(makeStartCandidate("sideline_right"));
     }
   }
 
-  CandidatePose makeCornerCandidate(const std::string & corner) const
+  CandidatePose makeStartCandidate(const std::string & side) const
   {
     const double half_length = court_length_m_ * 0.5;
-    const double half_width = court_width_m_ * 0.5;
+    const double half_doubles_width = court_width_m_ * 0.5;
     CandidatePose pose;
-    pose.label = corner;
+    pose.label = side;
 
-    if (corner == "near_left") {
-      pose.x = -half_length + corner_inset_m_;
-      pose.y = half_width - corner_inset_m_;
-      pose.yaw = 0.0;
-    } else if (corner == "near_right") {
-      pose.x = -half_length + corner_inset_m_;
-      pose.y = -half_width + corner_inset_m_;
-      pose.yaw = 0.0;
-    } else if (corner == "far_left") {
-      pose.x = half_length - corner_inset_m_;
-      pose.y = half_width - corner_inset_m_;
-      pose.yaw = kPi;
+    // Court x is the long axis and y is the short axis.  The vehicle starts
+    // parallel to a short baseline at its intersection with the doubles
+    // sideline.  The doubles sideline is too close to appear in the camera;
+    // the farther singles sideline supplies the left/right visual cue.
+    // A 180-degree rotation about the court center maps each physical corner
+    // onto an indistinguishable counterpart.
+    pose.x = -half_length;
+    if (side == "sideline_left") {
+      pose.y = half_doubles_width;
+      pose.yaw = -kPi * 0.5;
     } else {
-      pose.x = half_length - corner_inset_m_;
-      pose.y = -half_width + corner_inset_m_;
-      pose.yaw = kPi;
+      pose.y = -half_doubles_width;
+      pose.yaw = kPi * 0.5;
     }
     return pose;
   }
@@ -294,6 +330,22 @@ private:
     const double dx = x - last_vio_pose_->x;
     const double dy = y - last_vio_pose_->y;
     const double dyaw = normalizeAngle(yaw - last_vio_pose_->yaw);
+    accumulated_vio_translation_m_ += std::hypot(dx, dy);
+    accumulated_vio_rotation_rad_ += std::abs(dyaw);
+    if (
+      !use_full_court_map_ &&
+      (accumulated_vio_translation_m_ >= full_map_min_vio_translation_m_ ||
+      accumulated_vio_rotation_rad_ >= full_map_min_vio_rotation_rad_))
+    {
+      use_full_court_map_ = true;
+      RCLCPP_INFO(
+        get_logger(),
+        "switching to full court-line map after VIO motion "
+        "(translation=%.2fm rotation=%.1fdeg, doubles_sidelines=%s)",
+        accumulated_vio_translation_m_,
+        accumulated_vio_rotation_rad_ * 180.0 / kPi,
+        match_doubles_sidelines_ ? "enabled" : "disabled");
+    }
     for (auto & candidate : candidates_) {
       const double c = std::cos(candidate.yaw);
       const double s = std::sin(candidate.yaw);
@@ -309,6 +361,7 @@ private:
     try {
       const cv::Mat mono = imageToMono(*msg);
       const auto image_lines = detectImageLines(mono);
+      updateInitialSideHypothesis(image_lines, mono.cols, mono.rows);
       const auto ground_lines = projectLinesToGround(image_lines);
       publishDebugImage(*msg, mono, image_lines, ground_lines.size());
       publishCourtMap();
@@ -419,6 +472,79 @@ private:
       lines.resize(static_cast<size_t>(max_detected_lines_));
     }
     return lines;
+  }
+
+  void updateInitialSideHypothesis(
+    const std::vector<cv::Vec4i> & image_lines,
+    int image_width,
+    int image_height)
+  {
+    if (start_side_ != "unknown" || candidates_.size() != 2) {
+      return;
+    }
+
+    const double center_u = camera_info_valid_ ? cx_ : image_width * 0.5;
+    const double min_v = image_height * initial_side_min_v_fraction_;
+    const double max_slope = std::tan(initial_side_max_angle_rad_);
+    double left_length = 0.0;
+    double right_length = 0.0;
+
+    for (const auto & line : image_lines) {
+      const double u0 = line[0];
+      const double v0 = line[1];
+      const double u1 = line[2];
+      const double v1 = line[3];
+      const double du = std::abs(u1 - u0);
+      const double dv = std::abs(v1 - v0);
+      if (du < 1.0 || dv > du * max_slope || (v0 + v1) * 0.5 < min_v) {
+        continue;
+      }
+
+      const double min_u = std::min(u0, u1);
+      const double max_u = std::max(u0, u1);
+      left_length += std::max(0.0, std::min(max_u, center_u) - min_u);
+      right_length += std::max(0.0, max_u - std::max(min_u, center_u));
+    }
+
+    const double total_length = left_length + right_length;
+    const double confidence =
+      total_length > 1e-6 ? std::abs(right_length - left_length) / total_length : 0.0;
+    if (
+      total_length < initial_side_min_length_px_ ||
+      confidence < initial_side_min_confidence_)
+    {
+      initial_side_vote_streak_ = 0;
+      initial_side_last_vote_.clear();
+      return;
+    }
+
+    const std::string vote =
+      right_length > left_length ? "sideline_right" : "sideline_left";
+    if (vote == initial_side_last_vote_) {
+      ++initial_side_vote_streak_;
+    } else {
+      initial_side_last_vote_ = vote;
+      initial_side_vote_streak_ = 1;
+    }
+    if (initial_side_vote_streak_ < initial_side_required_frames_) {
+      return;
+    }
+
+    candidates_.erase(
+      std::remove_if(
+        candidates_.begin(),
+        candidates_.end(),
+        [&vote](const CandidatePose & candidate) {return candidate.label != vote;}),
+      candidates_.end());
+    RCLCPP_INFO(
+      get_logger(),
+      "initial side locked to %s after %d frames "
+      "(left_length=%.1fpx right_length=%.1fpx confidence=%.2f)",
+      vote.c_str(),
+      initial_side_vote_streak_,
+      left_length,
+      right_length,
+      confidence);
   }
 
   std::vector<Line2> projectLinesToGround(const std::vector<cv::Vec4i> & image_lines) const
@@ -547,9 +673,9 @@ private:
       const Point2 a = transformPoint(line.a, pose);
       const Point2 b = transformPoint(line.b, pose);
       const Point2 mid{(a.x + b.x) * 0.5, (a.y + b.y) * 0.5};
-      total += nearestMapDistance(a);
-      total += nearestMapDistance(mid);
-      total += nearestMapDistance(b);
+      total += nearestMapDistance(a, pose.label);
+      total += nearestMapDistance(mid, pose.label);
+      total += nearestMapDistance(b, pose.label);
       samples += 3;
     }
     if (samples == 0) {
@@ -558,10 +684,16 @@ private:
     return total / samples;
   }
 
-  double nearestMapDistance(const Point2 & point) const
+  double nearestMapDistance(const Point2 & point, const std::string & candidate_label) const
   {
     double best = std::numeric_limits<double>::infinity();
-    for (const auto & map_line : court_lines_) {
+    const std::vector<Line2> * map_lines = &matching_lines_;
+    if (!use_full_court_map_ && candidate_label == "sideline_left") {
+      map_lines = &initial_matching_lines_left_;
+    } else if (!use_full_court_map_ && candidate_label == "sideline_right") {
+      map_lines = &initial_matching_lines_right_;
+    }
+    for (const auto & map_line : *map_lines) {
       best = std::min(best, distancePointToSegment(point, map_line));
     }
     return best;
@@ -659,7 +791,7 @@ private:
   std::string vio_odom_topic_;
   std::string base_frame_;
   std::string court_frame_;
-  std::string start_corner_;
+  std::string start_side_;
   double camera_height_m_{0.14214};
   double camera_pitch_rad_{0.0};
   double court_length_m_{23.77};
@@ -679,7 +811,19 @@ private:
   double search_xy_step_m_{0.25};
   double search_yaw_range_rad_{0.70};
   double search_yaw_step_rad_{0.0872664626};
-  double corner_inset_m_{0.75};
+  double initial_side_min_v_fraction_{0.65};
+  double initial_side_max_angle_rad_{0.2617993878};
+  double initial_side_min_length_px_{120.0};
+  double initial_side_min_confidence_{0.35};
+  int initial_side_required_frames_{3};
+  int initial_side_vote_streak_{0};
+  std::string initial_side_last_vote_;
+  bool match_doubles_sidelines_{true};
+  double full_map_min_vio_translation_m_{0.5};
+  double full_map_min_vio_rotation_rad_{0.35};
+  double accumulated_vio_translation_m_{0.0};
+  double accumulated_vio_rotation_rad_{0.0};
+  bool use_full_court_map_{false};
   double fx_{0.0};
   double fy_{0.0};
   double cx_{0.0};
@@ -687,6 +831,9 @@ private:
   bool camera_info_valid_{false};
 
   std::vector<Line2> court_lines_;
+  std::vector<Line2> matching_lines_;
+  std::vector<Line2> initial_matching_lines_left_;
+  std::vector<Line2> initial_matching_lines_right_;
   std::vector<CandidatePose> candidates_;
   std::optional<CandidatePose> last_vio_pose_;
 
