@@ -15,20 +15,31 @@ if __package__ in (None, ""):
 from scripts import HelloBalls_Serial
 
 
+HOST_MANUAL_CONTROL = 4
+
+
 class KeyboardController:
     def __init__(
         self,
         serial_receiver: HelloBalls_Serial.SerialReceiver,
         speed: int,
-        state: int = 1,
+        state: int = HOST_MANUAL_CONTROL,
         command_rate: float = 50.0,
+        key_timeout: float = 0.15,
     ) -> None:
+        if command_rate <= 0:
+            raise ValueError("command_rate must be greater than zero")
+        if key_timeout <= 0:
+            raise ValueError("key_timeout must be greater than zero")
+
         self.serial_receiver = serial_receiver
         self.speed = abs(int(speed))
         self.state = int(state)
         self.command_period = 1.0 / command_rate
+        self.key_timeout = float(key_timeout)
         self.left_speed = 0
         self.right_speed = 0
+        self._movement_deadline = 0.0
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._old_terminal_settings = None
@@ -56,50 +67,83 @@ class KeyboardController:
     def _run(self) -> None:
         print(
             "Keyboard control enabled: "
-            "w=forward, s=backward, a=rotate left, d=rotate right, space=stop."
+            "hold w=forward, s=backward, a=rotate left, d=rotate right; space=stop."
         )
-        print(f"Keyboard speed: {self.speed}.")
+        print(
+            f"Keyboard speed: {self.speed}; commands stop after "
+            f"{self.key_timeout:.2f}s without another movement key."
+        )
 
         while not self._stop_event.is_set():
             if select.select([sys.stdin], [], [], 0)[0]:
                 key = sys.stdin.read(1)
                 self._handle_key(key)
 
-            self.serial_receiver.send_movement_command(self.state, self.left_speed, self.right_speed)
+            self._stop_if_key_stale(time.monotonic())
+            self._send_current_command()
             time.sleep(self.command_period)
 
     def _handle_key(self, key: str) -> None:
         if key == "w":
-            self.left_speed = self.speed
-            self.right_speed = self.speed
+            self._set_movement(self.speed, self.speed)
             print(f"\rForward L={self.left_speed} R={self.right_speed}   ", end="", flush=True)
         elif key == "s":
-            self.left_speed = -self.speed
-            self.right_speed = -self.speed
+            self._set_movement(-self.speed, -self.speed)
             print(f"\rBackward L={self.left_speed} R={self.right_speed}   ", end="", flush=True)
         elif key == "a":
-            self.left_speed = -self.speed
-            self.right_speed = self.speed
+            self._set_movement(-self.speed, self.speed)
             print(f"\rRotate left L={self.left_speed} R={self.right_speed}   ", end="", flush=True)
         elif key == "d":
-            self.left_speed = self.speed
-            self.right_speed = -self.speed
+            self._set_movement(self.speed, -self.speed)
             print(f"\rRotate right L={self.left_speed} R={self.right_speed}   ", end="", flush=True)
         elif key == " ":
-            self.left_speed = 0
-            self.right_speed = 0
+            self._set_stop()
             print("\rStop L=0 R=0   ", end="", flush=True)
+
+    def _set_movement(self, left_speed: int, right_speed: int) -> None:
+        self.left_speed = left_speed
+        self.right_speed = right_speed
+        self._movement_deadline = time.monotonic() + self.key_timeout
+
+    def _set_stop(self) -> None:
+        self.left_speed = 0
+        self.right_speed = 0
+        self._movement_deadline = 0.0
+
+    def _stop_if_key_stale(self, now: float) -> None:
+        if self._movement_deadline and now >= self._movement_deadline:
+            self._set_stop()
+
+    def _send_current_command(self) -> None:
+        self.serial_receiver.send_command(
+            self.state,
+            self.left_speed,
+            self.right_speed,
+            0,
+            0,
+        )
 
     def _send_stop(self) -> None:
         try:
-            self.serial_receiver.send_movement_command(self.state, 0, 0)
+            self.serial_receiver.send_command(self.state, 0, 0, 0, 0)
         except Exception as exc:
             print(f"\nWarning: failed to send stop command: {exc}")
 
 
-def run_keyboard_control(port: str, baudrate: int, speed: int, state: int) -> None:
+def run_keyboard_control(
+    port: str,
+    baudrate: int,
+    speed: int,
+    state: int,
+    key_timeout: float = 0.15,
+) -> None:
     receiver = HelloBalls_Serial.SerialReceiver(port=port, baudrate=baudrate)
-    controller = KeyboardController(serial_receiver=receiver, speed=speed, state=state)
+    controller = KeyboardController(
+        serial_receiver=receiver,
+        speed=speed,
+        state=state,
+        key_timeout=key_timeout,
+    )
 
     receiver.start()
     controller.start()
@@ -120,7 +164,18 @@ def main() -> None:
     parser.add_argument("--serial-port", default="/dev/ttyS1", help="UART device path for the MCU.")
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--speed", type=int, default=100, help="Wheel speed for keyboard movement.")
-    parser.add_argument("--state", type=int, default=1, help="MCU state value for movement commands.")
+    parser.add_argument(
+        "--state",
+        type=int,
+        default=HOST_MANUAL_CONTROL,
+        help="MCU state value for movement commands (default: 4, manual/scanning mode).",
+    )
+    parser.add_argument(
+        "--key-timeout",
+        type=float,
+        default=0.15,
+        help="Stop unless another movement key arrives within this many seconds.",
+    )
     args = parser.parse_args()
 
     run_keyboard_control(
@@ -128,6 +183,7 @@ def main() -> None:
         baudrate=args.baudrate,
         speed=args.speed,
         state=args.state,
+        key_timeout=args.key_timeout,
     )
 
 
