@@ -49,6 +49,16 @@ class ImuState:
     sample_time_us: Optional[int] = None
 
     @property
+    def wheel1_rpm(self) -> int:
+        """Wheel 1 speed; the wire field keeps its legacy name for compatibility."""
+        return self.wheel1_distance
+
+    @property
+    def wheel2_rpm(self) -> int:
+        """Wheel 2 speed; the wire field keeps its legacy name for compatibility."""
+        return self.wheel2_distance
+
+    @property
     def acc_g(self) -> tuple[float, float, float]:
         return (
             self.acc_x / ACC_RAW_PER_G,

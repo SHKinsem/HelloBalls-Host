@@ -8,6 +8,8 @@ from scripts.HelloBalls_Serial import ImuState
 
 G_TO_MPS2 = 9.80665
 DEG_TO_RAD = math.pi / 180.0
+RPM_TO_RAD_S = 2.0 * math.pi / 60.0
+DEFAULT_WHEEL_GEAR_RATIO = 3591.0 / 187.0
 
 
 @dataclass(frozen=True)
@@ -23,6 +25,92 @@ class RosPublisherConfig:
     imu_angular_velocity_variance: float = 0.0
     imu_linear_acceleration_variance: float = 0.0
     allow_legacy_imu_timestamps: bool = False
+    wheel_odom_topic: str = "/wheel/odom"
+    wheel_odom_frame_id: str = "wheel_odom"
+    wheel_base_frame_id: str = "base_link"
+    wheel_radius_m: float = 0.0
+    wheel_track_m: float = 0.0
+    wheel_gear_ratio: float = DEFAULT_WHEEL_GEAR_RATIO
+    wheel1_sign: float = 1.0
+    wheel2_sign: float = 1.0
+    wheel_max_sample_gap_s: float = 0.25
+
+
+@dataclass(frozen=True)
+class WheelOdometryState:
+    x_m: float
+    y_m: float
+    yaw_rad: float
+    linear_m_s: float
+    angular_rad_s: float
+
+
+class DifferentialDriveOdometry:
+    """Integrate two wheel RPM values with differential-drive kinematics."""
+
+    def __init__(
+        self,
+        wheel_radius_m: float,
+        wheel_track_m: float,
+        wheel_gear_ratio: float = 1.0,
+        wheel1_sign: float = 1.0,
+        wheel2_sign: float = 1.0,
+        max_sample_gap_s: float = 0.25,
+    ) -> None:
+        if not math.isfinite(wheel_radius_m) or wheel_radius_m <= 0.0:
+            raise ValueError("wheel_radius_m must be a positive finite value")
+        if not math.isfinite(wheel_track_m) or wheel_track_m <= 0.0:
+            raise ValueError("wheel_track_m must be a positive finite value")
+        if not math.isfinite(wheel_gear_ratio) or wheel_gear_ratio <= 0.0:
+            raise ValueError("wheel_gear_ratio must be a positive finite value")
+        if wheel1_sign not in (-1.0, 1.0) or wheel2_sign not in (-1.0, 1.0):
+            raise ValueError("wheel signs must be either -1 or 1")
+        if not math.isfinite(max_sample_gap_s) or max_sample_gap_s <= 0.0:
+            raise ValueError("wheel_max_sample_gap_s must be a positive finite value")
+        self.wheel_radius_m = wheel_radius_m
+        self.wheel_track_m = wheel_track_m
+        self.wheel_gear_ratio = wheel_gear_ratio
+        self.wheel1_sign = wheel1_sign
+        self.wheel2_sign = wheel2_sign
+        self.max_sample_gap_s = max_sample_gap_s
+        self.x_m = 0.0
+        self.y_m = 0.0
+        self.yaw_rad = 0.0
+        self._last_timestamp: float | None = None
+
+    def update(self, wheel1_rpm: float, wheel2_rpm: float, timestamp: float) -> WheelOdometryState:
+        values = (wheel1_rpm, wheel2_rpm, timestamp)
+        if not all(math.isfinite(value) for value in values):
+            raise ValueError("wheel RPM and timestamp must be finite")
+
+        speed_factor = RPM_TO_RAD_S * self.wheel_radius_m / self.wheel_gear_ratio
+        wheel1_m_s = self.wheel1_sign * wheel1_rpm * speed_factor
+        wheel2_m_s = self.wheel2_sign * wheel2_rpm * speed_factor
+        linear_m_s = 0.5 * (wheel1_m_s + wheel2_m_s)
+        angular_rad_s = (wheel2_m_s - wheel1_m_s) / self.wheel_track_m
+
+        if self._last_timestamp is not None:
+            dt = timestamp - self._last_timestamp
+            if dt <= 0.0:
+                raise ValueError("wheel timestamp must be strictly increasing")
+            if dt <= self.max_sample_gap_s:
+                yaw_delta = angular_rad_s * dt
+                midpoint_yaw = self.yaw_rad + 0.5 * yaw_delta
+                distance = linear_m_s * dt
+                self.x_m += distance * math.cos(midpoint_yaw)
+                self.y_m += distance * math.sin(midpoint_yaw)
+                self.yaw_rad = math.atan2(
+                    math.sin(self.yaw_rad + yaw_delta),
+                    math.cos(self.yaw_rad + yaw_delta),
+                )
+        self._last_timestamp = timestamp
+        return WheelOdometryState(
+            self.x_m,
+            self.y_m,
+            self.yaw_rad,
+            linear_m_s,
+            angular_rad_s,
+        )
 
 
 class McuClockSynchronizer:
@@ -93,6 +181,16 @@ class RosSensorPublisher:
         self.config = config or RosPublisherConfig()
         if not math.isfinite(self.config.imu_accel_scale) or self.config.imu_accel_scale <= 0.0:
             raise ValueError("imu_accel_scale must be a positive finite value")
+        if not math.isfinite(self.config.wheel_radius_m) or self.config.wheel_radius_m < 0.0:
+            raise ValueError("wheel_radius_m must be a finite non-negative value")
+        if not math.isfinite(self.config.wheel_track_m) or self.config.wheel_track_m < 0.0:
+            raise ValueError("wheel_track_m must be a finite non-negative value")
+        if not math.isfinite(self.config.wheel_gear_ratio) or self.config.wheel_gear_ratio <= 0.0:
+            raise ValueError("wheel_gear_ratio must be a positive finite value")
+        wheel_radius_set = self.config.wheel_radius_m > 0.0
+        wheel_track_set = self.config.wheel_track_m > 0.0
+        if wheel_radius_set != wheel_track_set:
+            raise ValueError("wheel_radius_m and wheel_track_m must be set together")
         self.rclpy = import_module("rclpy")
         self.imu_msg = import_module("sensor_msgs.msg").Imu
         self.time_msg = import_module("builtin_interfaces.msg").Time
@@ -102,6 +200,24 @@ class RosSensorPublisher:
         self.node = self.rclpy.create_node(self.config.node_name)
         sensor_qos = qos.qos_profile_sensor_data
         self.imu_pub = self.node.create_publisher(self.imu_msg, self.config.imu_topic, sensor_qos)
+        self.wheel_odom = None
+        self.wheel_odom_pub = None
+        self.wheel_odom_msg = None
+        if wheel_radius_set:
+            self.wheel_odom_msg = import_module("nav_msgs.msg").Odometry
+            self.wheel_odom_pub = self.node.create_publisher(
+                self.wheel_odom_msg,
+                self.config.wheel_odom_topic,
+                sensor_qos,
+            )
+            self.wheel_odom = DifferentialDriveOdometry(
+                self.config.wheel_radius_m,
+                self.config.wheel_track_m,
+                self.config.wheel_gear_ratio,
+                self.config.wheel1_sign,
+                self.config.wheel2_sign,
+                self.config.wheel_max_sample_gap_s,
+            )
         self._mcu_clock = McuClockSynchronizer()
         self._legacy_warning_emitted = False
 
@@ -152,7 +268,30 @@ class RosSensorPublisher:
         imu_msg.angular_velocity.y = gyro_y * DEG_TO_RAD
         imu_msg.angular_velocity.z = gyro_z * DEG_TO_RAD
         self.imu_pub.publish(imu_msg)
+        self._publish_wheel_odometry(state, timestamp, stamp)
         return True
+
+    def _publish_wheel_odometry(self, state: ImuState, timestamp: float, stamp) -> None:
+        if self.wheel_odom is None or self.wheel_odom_pub is None:
+            return
+        try:
+            odom = self.wheel_odom.update(state.wheel1_rpm, state.wheel2_rpm, timestamp)
+        except ValueError as error:
+            self.node.get_logger().warning(f"Dropping invalid wheel RPM sample: {error}")
+            return
+
+        msg = self.wheel_odom_msg()
+        msg.header.stamp = stamp
+        msg.header.frame_id = self.config.wheel_odom_frame_id
+        msg.child_frame_id = self.config.wheel_base_frame_id
+        msg.pose.pose.position.x = odom.x_m
+        msg.pose.pose.position.y = odom.y_m
+        half_yaw = 0.5 * odom.yaw_rad
+        msg.pose.pose.orientation.z = math.sin(half_yaw)
+        msg.pose.pose.orientation.w = math.cos(half_yaw)
+        msg.twist.twist.linear.x = odom.linear_m_s
+        msg.twist.twist.angular.z = odom.angular_rad_s
+        self.wheel_odom_pub.publish(msg)
 
     def spin_once(self) -> None:
         self.rclpy.spin_once(self.node, timeout_sec=0.0)
