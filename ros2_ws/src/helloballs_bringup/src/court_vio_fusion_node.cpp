@@ -10,10 +10,13 @@
 #include <string>
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <geometry_msgs/msg/transform_stamped.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <nav_msgs/msg/path.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <visualization_msgs/msg/marker_array.hpp>
 
 namespace
 {
@@ -170,6 +173,11 @@ public:
       declare_parameter<std::string>("court_pose_topic", "/court/pose_measurement");
     output_topic_ =
       declare_parameter<std::string>("output_topic", "/localization/odometry");
+    path_topic_ = declare_parameter<std::string>("path_topic", "/localization/path");
+    vehicle_marker_topic_ =
+      declare_parameter<std::string>(
+      "vehicle_marker_topic",
+      "/localization/vehicle_markers");
     court_frame_ = declare_parameter<std::string>("court_frame", "court");
     world_frame_ = declare_parameter<std::string>("world_frame", "world");
     base_frame_ = declare_parameter<std::string>("base_frame", "base_link");
@@ -189,10 +197,23 @@ public:
       declare_parameter<double>("max_correction_step_yaw_rad", 0.05);
     max_white_xy_variance_ = declare_parameter<double>("max_white_xy_variance", 1.0);
     max_white_yaw_variance_ = declare_parameter<double>("max_white_yaw_variance", 0.5);
+    max_path_poses_ = declare_parameter<int>("max_path_poses", 2000);
+    path_min_translation_m_ =
+      declare_parameter<double>("path_min_translation_m", 0.02);
+    vehicle_length_m_ = declare_parameter<double>("vehicle_length_m", 0.45);
+    vehicle_width_m_ = declare_parameter<double>("vehicle_width_m", 0.35);
+    vehicle_height_m_ = declare_parameter<double>("vehicle_height_m", 0.18);
 
     validateParameters();
 
     output_pub_ = create_publisher<nav_msgs::msg::Odometry>(output_topic_, 50);
+    path_pub_ = create_publisher<nav_msgs::msg::Path>(
+      path_topic_,
+      rclcpp::QoS(1).transient_local());
+    vehicle_marker_pub_ =
+      create_publisher<visualization_msgs::msg::MarkerArray>(
+      vehicle_marker_topic_,
+      rclcpp::QoS(1).transient_local());
     if (publish_tf_) {
       tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
     }
@@ -237,6 +258,11 @@ private:
     max_correction_step_yaw_rad_ = std::max(0.001, max_correction_step_yaw_rad_);
     max_white_xy_variance_ = std::max(0.0, max_white_xy_variance_);
     max_white_yaw_variance_ = std::max(0.0, max_white_yaw_variance_);
+    max_path_poses_ = std::max(10, max_path_poses_);
+    path_min_translation_m_ = std::max(0.0, path_min_translation_m_);
+    vehicle_length_m_ = std::max(0.05, vehicle_length_m_);
+    vehicle_width_m_ = std::max(0.05, vehicle_width_m_);
+    vehicle_height_m_ = std::max(0.02, vehicle_height_m_);
     if (court_frame_ == world_frame_) {
       throw std::runtime_error("court_frame and world_frame must differ");
     }
@@ -260,6 +286,21 @@ private:
         get_logger(), *get_clock(), 2000, "dropping VIO odometry with zero timestamp");
       return;
     }
+    if (!vio_buffer_.empty() && stamp <= vio_buffer_.back().stamp) {
+      const double rewind_s = (vio_buffer_.back().stamp - stamp).seconds();
+      if (rewind_s > 1.0) {
+        RCLCPP_WARN(
+          get_logger(),
+          "odometry timestamp rewound by %.3fs; starting a new fusion run",
+          rewind_s);
+        resetForNewTimeline();
+      } else {
+        RCLCPP_WARN_THROTTLE(
+          get_logger(), *get_clock(), 2000, "dropping out-of-order VIO odometry");
+        return;
+      }
+    }
+
     if (!vio_buffer_.empty() && stamp <= vio_buffer_.back().stamp) {
       RCLCPP_WARN_THROTTLE(
         get_logger(), *get_clock(), 2000, "dropping out-of-order VIO odometry");
@@ -306,6 +347,15 @@ private:
     if (stamp.nanoseconds() <= 0) {
       rejectMeasurement("zero timestamp");
       return;
+    }
+    if (
+      !vio_buffer_.empty() &&
+      (vio_buffer_.back().stamp - stamp).seconds() > 1.0)
+    {
+      RCLCPP_WARN(
+        get_logger(),
+        "court measurement timestamp rewound; starting a new fusion run");
+      resetForNewTimeline();
     }
     const double xy_variance =
       std::max(msg->pose.covariance[0], msg->pose.covariance[7]);
@@ -508,6 +558,7 @@ private:
     output.twist.twist.linear.y = body_velocity.y;
     output.twist.twist.linear.z = body_velocity.z;
     output_pub_->publish(output);
+    publishVisualization(output);
 
     if (tf_broadcaster_) {
       geometry_msgs::msg::TransformStamped transform;
@@ -526,6 +577,63 @@ private:
     }
   }
 
+  void publishVisualization(const nav_msgs::msg::Odometry & odometry)
+  {
+    const auto & position = odometry.pose.pose.position;
+    const bool append_path =
+      path_.poses.empty() ||
+      std::hypot(
+      position.x - path_.poses.back().pose.position.x,
+      position.y - path_.poses.back().pose.position.y) >= path_min_translation_m_;
+    if (append_path) {
+      geometry_msgs::msg::PoseStamped pose;
+      pose.header = odometry.header;
+      pose.pose = odometry.pose.pose;
+      path_.poses.push_back(std::move(pose));
+      while (static_cast<int>(path_.poses.size()) > max_path_poses_) {
+        path_.poses.erase(path_.poses.begin());
+      }
+    }
+    path_.header = odometry.header;
+    path_pub_->publish(path_);
+
+    visualization_msgs::msg::MarkerArray markers;
+    visualization_msgs::msg::Marker body;
+    body.header = odometry.header;
+    body.ns = "estimated_vehicle";
+    body.id = 0;
+    body.type = visualization_msgs::msg::Marker::CUBE;
+    body.action = visualization_msgs::msg::Marker::ADD;
+    body.pose = odometry.pose.pose;
+    body.pose.position.z = vehicle_height_m_ * 0.5;
+    body.scale.x = vehicle_length_m_;
+    body.scale.y = vehicle_width_m_;
+    body.scale.z = vehicle_height_m_;
+    body.color.r = 1.0f;
+    body.color.g = 0.35f;
+    body.color.b = 0.05f;
+    body.color.a = 0.90f;
+    markers.markers.push_back(body);
+
+    visualization_msgs::msg::Marker heading;
+    heading.header = odometry.header;
+    heading.ns = "estimated_vehicle";
+    heading.id = 1;
+    heading.type = visualization_msgs::msg::Marker::ARROW;
+    heading.action = visualization_msgs::msg::Marker::ADD;
+    heading.pose = odometry.pose.pose;
+    heading.pose.position.z = vehicle_height_m_ + 0.03;
+    heading.scale.x = vehicle_length_m_ * 1.25;
+    heading.scale.y = vehicle_width_m_ * 0.22;
+    heading.scale.z = vehicle_width_m_ * 0.22;
+    heading.color.r = 0.10f;
+    heading.color.g = 1.0f;
+    heading.color.b = 0.25f;
+    heading.color.a = 1.0f;
+    markers.markers.push_back(heading);
+    vehicle_marker_pub_->publish(markers);
+  }
+
   void rejectMeasurement(const char * reason)
   {
     RCLCPP_WARN_THROTTLE(
@@ -536,9 +644,25 @@ private:
       reason);
   }
 
+  void resetForNewTimeline()
+  {
+    vio_buffer_.clear();
+    correction_ = PlanarPose{};
+    correction_initialized_ = false;
+    correction_xy_variance_ = 0.1;
+    correction_yaw_variance_ = 0.1;
+    pending_correction_ = PlanarPose{};
+    pending_count_ = 0;
+    pending_xy_variance_ = 0.0;
+    pending_yaw_variance_ = 0.0;
+    path_ = nav_msgs::msg::Path{};
+  }
+
   std::string vio_topic_;
   std::string court_pose_topic_;
   std::string output_topic_;
+  std::string path_topic_;
+  std::string vehicle_marker_topic_;
   std::string court_frame_;
   std::string world_frame_;
   std::string base_frame_;
@@ -555,6 +679,11 @@ private:
   double max_correction_step_yaw_rad_{0.05};
   double max_white_xy_variance_{1.0};
   double max_white_yaw_variance_{0.5};
+  int max_path_poses_{2000};
+  double path_min_translation_m_{0.02};
+  double vehicle_length_m_{0.45};
+  double vehicle_width_m_{0.35};
+  double vehicle_height_m_{0.18};
 
   std::deque<VioSample> vio_buffer_;
   PlanarPose correction_;
@@ -565,8 +694,12 @@ private:
   int pending_count_{0};
   double pending_xy_variance_{0.0};
   double pending_yaw_variance_{0.0};
+  nav_msgs::msg::Path path_;
 
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr output_pub_;
+  rclcpp::Publisher<nav_msgs::msg::Path>::SharedPtr path_pub_;
+  rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr
+    vehicle_marker_pub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr vio_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
     court_pose_sub_;
