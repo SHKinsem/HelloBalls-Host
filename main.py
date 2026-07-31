@@ -3,7 +3,7 @@ from pathlib import Path
 import time
 
 from scripts import HelloBalls_Serial
-from scripts.keyboard_control import KeyboardController
+from scripts.keyboard_control import HOST_MANUAL_CONTROL, KeyboardController
 
 
 def default_vins_config_file(ros_workspace: str) -> str:
@@ -51,7 +51,11 @@ def main():
     parser.add_argument("--serial-port", default="/dev/ttyS1", help="UART device path for the MCU.")
     parser.add_argument("--baudrate", type=int, default=115200)
     parser.add_argument("--print-imu", action="store_true", help="Print received IMU frames.")
-    parser.add_argument("--ros-publish", action="store_true", help="Publish IMU data as a ROS2 topic.")
+    parser.add_argument(
+        "--ros-publish",
+        action="store_true",
+        help="Publish serial IMU and configured wheel odometry as ROS2 topics.",
+    )
     parser.add_argument(
         "--ros-sensors",
         action="store_true",
@@ -65,6 +69,41 @@ def main():
     parser.add_argument("--ros-node-name", default="helloballs_sensor_publisher")
     parser.add_argument("--imu-topic", default="/imu/data_raw")
     parser.add_argument("--imu-frame-id", default="imu_link")
+    parser.add_argument("--wheel-odom-topic", default="/wheel/odom")
+    parser.add_argument("--wheel-odom-frame-id", default="wheel_odom")
+    parser.add_argument("--wheel-base-frame-id", default="base_link")
+    parser.add_argument(
+        "--wheel-radius-m",
+        type=float,
+        default=0.0,
+        help="Driven-wheel radius in metres. Set with --wheel-track-m to publish wheel odometry.",
+    )
+    parser.add_argument(
+        "--wheel-track-m",
+        type=float,
+        default=0.0,
+        help="Lateral distance between driven-wheel contact centres in metres.",
+    )
+    parser.add_argument(
+        "--wheel-gear-ratio",
+        type=float,
+        default=3591.0 / 187.0,
+        help="Motor RPM divided by wheel RPM; defaults to 3591/187.",
+    )
+    parser.add_argument(
+        "--wheel1-sign",
+        type=float,
+        choices=(-1.0, 1.0),
+        default=1.0,
+        help="Set to -1 if left/wheel 1 RPM is negative while the vehicle drives forward.",
+    )
+    parser.add_argument(
+        "--wheel2-sign",
+        type=float,
+        choices=(-1.0, 1.0),
+        default=1.0,
+        help="Set to -1 if right/wheel 2 RPM is negative while the vehicle drives forward.",
+    )
     parser.add_argument(
         "--allow-legacy-imu-timestamps",
         action="store_true",
@@ -96,7 +135,12 @@ def main():
     )
     parser.add_argument("--keyboard-control", action="store_true", help="Enable keyboard driving over the MCU UART.")
     parser.add_argument("--keyboard-speed", type=int, default=100, help="Motor speed used by keyboard control.")
-    parser.add_argument("--keyboard-state", type=int, default=1, help="MCU state value used for keyboard motor commands.")
+    parser.add_argument(
+        "--keyboard-state",
+        type=int,
+        default=HOST_MANUAL_CONTROL,
+        help="MCU state value used for keyboard motor commands (default: 4, manual/scanning mode).",
+    )
     parser.add_argument(
         "--keyboard-timeout",
         type=float,
@@ -228,6 +272,14 @@ def main():
                     imu_angular_velocity_variance=args.imu_angular_velocity_variance,
                     imu_linear_acceleration_variance=args.imu_linear_acceleration_variance,
                     allow_legacy_imu_timestamps=args.allow_legacy_imu_timestamps,
+                    wheel_odom_topic=args.wheel_odom_topic,
+                    wheel_odom_frame_id=args.wheel_odom_frame_id,
+                    wheel_base_frame_id=args.wheel_base_frame_id,
+                    wheel_radius_m=args.wheel_radius_m,
+                    wheel_track_m=args.wheel_track_m,
+                    wheel_gear_ratio=args.wheel_gear_ratio,
+                    wheel1_sign=args.wheel1_sign,
+                    wheel2_sign=args.wheel2_sign,
                 )
             )
             imu_timestamp_mode = (
@@ -236,6 +288,12 @@ def main():
                 else "MCU-timestamped IMU v2 required"
             )
             print(f"ROS2 IMU publisher started: {args.imu_topic} ({imu_timestamp_mode}).")
+            if args.wheel_radius_m > 0.0 and args.wheel_track_m > 0.0:
+                print(
+                    "ROS2 wheel odometry publisher started: "
+                    f"{args.wheel_odom_topic} (radius={args.wheel_radius_m} m, "
+                    f"track={args.wheel_track_m} m, gear={args.wheel_gear_ratio:.6f})."
+                )
 
         if not args.no_serial:
             imu_callback = ros_publisher.publish_imu if ros_publisher is not None else None
