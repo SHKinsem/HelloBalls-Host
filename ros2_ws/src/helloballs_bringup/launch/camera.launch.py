@@ -1,5 +1,5 @@
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -18,6 +18,7 @@ def generate_launch_description():
     camera_info_rate_hz = LaunchConfiguration("camera_info_rate_hz")
     start_mono_converter = LaunchConfiguration("start_mono_converter")
     mono_image_topic = LaunchConfiguration("mono_image_topic")
+    rmw_implementation = LaunchConfiguration("rmw_implementation")
 
     return LaunchDescription(
         [
@@ -32,6 +33,15 @@ def generate_launch_description():
             DeclareLaunchArgument("camera_info_rate_hz", default_value="1.0"),
             DeclareLaunchArgument("start_mono_converter", default_value="false"),
             DeclareLaunchArgument("mono_image_topic", default_value="/camera/image_mono"),
+            DeclareLaunchArgument(
+                "rmw_implementation",
+                default_value="rmw_fastrtps_cpp",
+                description="ROS 2 middleware used by the camera processes.",
+            ),
+            SetEnvironmentVariable(
+                name="RMW_IMPLEMENTATION",
+                value=rmw_implementation,
+            ),
             Node(
                 package="helloballs_bringup",
                 executable="camera_publisher_node",

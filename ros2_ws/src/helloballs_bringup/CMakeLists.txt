@@ -43,6 +43,7 @@ ament_target_dependencies(
   nav_msgs
   rclcpp
   tf2_ros
+  visualization_msgs
 )
 
 install(TARGETS

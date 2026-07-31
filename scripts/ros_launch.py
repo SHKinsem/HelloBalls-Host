@@ -15,6 +15,7 @@ class RosLaunchConfig:
     launch_file: str = "camera.launch.py"
     ros_setup: Path = Path("/opt/ros/humble/setup.bash")
     ros_log_dir: Path = Path("/tmp/ros-log")
+    rmw_implementation: str = "rmw_fastrtps_cpp"
     launch_arguments: dict[str, str] = field(default_factory=dict)
 
 
@@ -52,10 +53,15 @@ class RosLaunchProcess:
             f"source {shlex.quote(str(install_setup))} && "
             + " ".join(shlex.quote(arg) for arg in ros2_args)
         )
+        child_env = {
+            **os.environ,
+            "ROS_LOG_DIR": str(self.config.ros_log_dir),
+            "RMW_IMPLEMENTATION": self.config.rmw_implementation,
+        }
         self.process = subprocess.Popen(
             ["bash", "-lc", command],
             cwd=workspace,
-            env={**os.environ, "ROS_LOG_DIR": str(self.config.ros_log_dir)},
+            env=child_env,
             start_new_session=True,
         )
 

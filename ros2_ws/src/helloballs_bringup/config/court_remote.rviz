@@ -1,0 +1,139 @@
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Alpha: 0.35
+      Cell Size: 1
+      Class: rviz_default_plugins/Grid
+      Color: 100; 100; 108
+      Enabled: true
+      Line Style:
+        Line Width: 0.03
+        Value: Lines
+      Name: Meter Grid
+      Plane: XY
+      Plane Cell Count: 30
+      Reference Frame: court
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/Marker
+      Enabled: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /court/map_lines
+      Name: Standard Tennis Court
+      Namespaces:
+        {}
+      Queue Size: 1
+      Value: true
+    - Alpha: 1
+      Buffer Length: 1
+      Class: rviz_default_plugins/Path
+      Color: 255; 210; 40
+      Enabled: true
+      Line Style: Lines
+      Line Width: 0.08
+      Name: Estimated Vehicle Trajectory
+      Offset:
+        X: 0
+        Y: 0
+        Z: 0.03
+      Pose Color: 255; 120; 40
+      Pose Style: None
+      Topic:
+        Value: /localization/path
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/MarkerArray
+      Enabled: true
+      Topic:
+        Depth: 5
+        Durability Policy: Transient Local
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /localization/vehicle_markers
+      Name: Estimated Vehicle
+      Namespaces:
+        {}
+      Queue Size: 1
+      Value: true
+    - Alpha: 1
+      Class: rviz_default_plugins/Odometry
+      Covariance:
+        Value: false
+      Enabled: false
+      Keep: 1
+      Name: Fused Localization
+      Position Tolerance: 0.03
+      Shape:
+        Alpha: 1
+        Axes Length: 0.75
+        Axes Radius: 0.06
+        Color: 255; 105; 25
+        Head Length: 0.25
+        Head Radius: 0.12
+        Shaft Length: 0.50
+        Shaft Radius: 0.06
+        Value: Arrow
+      Topic:
+        Value: /localization/odometry
+      Value: false
+    - Alpha: 1
+      Class: rviz_default_plugins/PoseWithCovariance
+      Enabled: false
+      Name: Court Line Measurement
+      Shape:
+        Alpha: 1
+        Axes Length: 0.75
+        Axes Radius: 0.06
+        Color: 40; 210; 255
+        Value: Arrow
+      Topic:
+        Value: /court/pose_measurement
+      Value: false
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /court/debug_image
+      Max Value: 1
+      Median window: 5
+      Min Value: 0
+      Name: White Line Detection
+      Normalize Range: true
+      Queue Size: 2
+      Transport Hint: raw
+      Value: true
+  Enabled: true
+  Global Options:
+    Background Color: 20; 20; 24
+    Default Light: true
+    Fixed Frame: court
+    Frame Rate: 30
+  Name: root
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/FocusCamera
+    - Class: rviz_default_plugins/Measure
+  Value: true
+  Views:
+    Current:
+      Class: rviz_default_plugins/TopDownOrtho
+      Name: Top Down View
+      Scale: 28
+      Target Frame: court
+      Value: TopDownOrtho
+    Saved: ~
+Window Geometry:
+  Height: 900
+  Width: 1440

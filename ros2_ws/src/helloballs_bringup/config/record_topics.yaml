@@ -5,5 +5,11 @@ topics:
   - /imu/data
   - /vio/odometry
   - /vio/path
+  - /wheel/odom
+  - /court/visual_odometry
+  - /court/pose_measurement
+  - /localization/odometry
+  - /localization/path
+  - /localization/vehicle_markers
   - /tf
   - /tf_static
