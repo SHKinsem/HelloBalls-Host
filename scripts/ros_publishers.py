@@ -9,7 +9,7 @@ from scripts.HelloBalls_Serial import ImuState
 G_TO_MPS2 = 9.80665
 DEG_TO_RAD = math.pi / 180.0
 RPM_TO_RAD_S = 2.0 * math.pi / 60.0
-DEFAULT_WHEEL_GEAR_RATIO = 3591.0 / 187.0
+DEFAULT_WHEEL_GEAR_RATIO = (46.0 * 77.0) / (17.0 * 14.0)
 
 
 @dataclass(frozen=True)

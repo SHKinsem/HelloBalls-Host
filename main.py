@@ -87,7 +87,7 @@ def main():
     parser.add_argument(
         "--wheel-gear-ratio",
         type=float,
-        default=3591.0 / 187.0,
+        default=(46.0 * 77.0) / (17.0 * 14.0),
         help="Motor RPM divided by wheel RPM; defaults to 3591/187.",
     )
     parser.add_argument(
