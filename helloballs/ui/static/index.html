@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HelloBalls Console</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --line: #e2e5eb;
+    --accent: #2f7d32; --accent-soft: #e6f2e6; --warn: #c0392b; --ball: #c6d92b; --grid: #e9ecf1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171c; --panel: #1d2128; --text: #e6e8ec; --muted: #8b93a3; --line: #2c323c;
+      --accent: #6cc070; --accent-soft: #233425; --warn: #ff6b5b; --ball: #d8ec3a; --grid: #262b33;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, "Segoe UI", "Microsoft YaHei", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 16px; margin: 0; }
+  .stat { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .badge { padding: 2px 8px; border-radius: 10px; font-size: 12px; background: var(--accent-soft); color: var(--accent); }
+  .badge.warn { background: color-mix(in srgb, var(--warn) 15%, transparent); color: var(--warn); }
+  main { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; padding: 16px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .video { background: #000; border-radius: 8px; overflow: hidden; }
+  .video img { display: block; width: 100%; height: auto; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+  .card h2 { font-size: 13px; margin: 0 0 10px; color: var(--muted); font-weight: 600; letter-spacing: .02em; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 12px; }
+  .tabs button { flex: 1; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button.primary, .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  label.row { display: grid; grid-template-columns: 110px 1fr 54px; align-items: center; gap: 8px; margin: 6px 0; }
+  label.row.wide { grid-template-columns: 110px 1fr; }
+  input[type=text], input[type=number], select { width: 100%; font: inherit; padding: 4px 6px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--text); }
+  input[type=range] { width: 100%; accent-color: var(--accent); }
+  .val { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+  .btns { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .error { color: var(--warn); font-size: 13px; margin-top: 6px; white-space: pre-wrap; }
+  canvas { width: 100%; height: 260px; display: block; }
+  .hidden { display: none; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-variant-numeric: tabular-nums; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .below { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 900px) { .below { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>HelloBalls 控制台</h1>
+  <span class="stat" id="fps">-- FPS</span>
+  <span class="stat" id="infer"></span>
+  <span class="stat" id="size"></span>
+  <span class="badge" id="calibBadge">--</span>
+  <span class="error" id="topError"></span>
+</header>
+
+<main>
+  <section>
+    <div class="video"><img id="stream" src="/stream.mjpg" alt="camera stream"></div>
+    <div class="below">
+      <div class="card">
+        <h2>检测结果（相机坐标系）</h2>
+        <table>
+          <thead><tr><th>#</th><th>置信度</th><th>距离 m</th><th>方位角 °</th><th>俯仰角 °</th><th>尺寸法</th><th>地面法</th></tr></thead>
+          <tbody id="balls"><tr><td colspan="7" class="muted">暂无</td></tr></tbody>
+        </table>
+        <p class="muted">方位角向右为正；尺寸法 / 地面法是两种测距的原始值，距离是融合结果。</p>
+      </div>
+      <div class="card">
+        <h2>俯视图（地面，单位 m）</h2>
+        <canvas id="map"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="tabs">
+      <button id="tabDetect" class="active">检测</button>
+      <button id="tabCalib">标定</button>
+    </div>
+
+    <div class="card">
+      <h2>输入</h2>
+      <label class="row wide"><span>来源</span><input type="text" id="source" placeholder="0 / 视频路径 / 图片路径"></label>
+      <label class="row wide"><span>分辨率</span>
+        <select id="resolution">
+          <option value="640x480">640 × 480</option>
+          <option value="1280x720">1280 × 720</option>
+          <option value="1920x1080">1920 × 1080</option>
+        </select>
+      </label>
+      <div class="btns"><button id="applySource">打开</button><button id="snapshot">拍照保存</button></div>
+      <div class="muted" id="snapMsg"></div>
+    </div>
+
+    <div id="detectPanel">
+      <div class="card">
+        <h2>模型</h2>
+        <label class="row wide"><span>模型文件</span><select id="model"></select></label>
+        <label class="row"><span>置信度阈值</span><input type="range" id="conf" min="0.05" max="0.95" step="0.05"><span class="val" id="confVal"></span></label>
+      </div>
+      <div class="card">
+        <h2>相机</h2>
+        <label class="row wide"><span>内参文件</span><select id="cameraYaml"></select></label>
+        <label class="row"><span>假设视角 °</span><input type="range" id="hfov" min="40" max="120" step="1"><span class="val" id="hfovVal"></span></label>
+        <p class="muted">没选内参文件时，按假设视角估算焦距，距离只供参考。</p>
+      </div>
+      <div class="card">
+        <h2>安装（启用地面测距）</h2>
+        <label class="row wide"><span>启用</span><input type="checkbox" id="mountEnabled"></label>
+        <label class="row"><span>高度 m</span><input type="range" id="mountHeight" min="0.05" max="1.0" step="0.01"><span class="val" id="mountHeightVal"></span></label>
+        <label class="row"><span>下俯角 °</span><input type="range" id="mountPitch" min="-10" max="60" step="0.5"><span class="val" id="mountPitchVal"></span></label>
+      </div>
+    </div>
+
+    <div id="calibPanel" class="hidden">
+      <div class="card">
+        <h2>棋盘格</h2>
+        <label class="row wide"><span>内角点 列</span><input type="number" id="calibCols" min="3" max="30"></label>
+        <label class="row wide"><span>内角点 行</span><input type="number" id="calibRows" min="3" max="30"></label>
+        <label class="row wide"><span>格子边长 mm</span><input type="number" id="calibSquare" min="1" step="0.1"></label>
+        <p class="muted">10×7 个格子的棋盘 = 9×6 个内角点。边长用尺子量打印出来的实际尺寸。</p>
+      </div>
+      <div class="card">
+        <h2>采集</h2>
+        <div class="kv"><span>已采集</span><span id="calibViews">0</span><span>当前画面</span><span id="boardFound">--</span></div>
+        <div class="btns"><button class="primary" id="calibCapture" disabled>采集当前画面 (空格)</button><button id="calibClear">清空</button></div>
+        <p class="muted">20 张以上，覆盖画面四角和中间，远近、倾斜角度都要有。</p>
+      </div>
+      <div class="card">
+        <h2>计算</h2>
+        <label class="row wide"><span>保存名称</span><input type="text" id="calibName" value="usb_cam"></label>
+        <div class="btns"><button class="primary" id="calibRun" disabled>开始标定</button></div>
+        <div class="kv" id="calibResult" style="margin-top:8px"></div>
+        <div class="error" id="calibError"></div>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let state = null;
+let editing = new Set();  // inputs the user is touching; don't overwrite them from polling
+
+async function post(path, body = {}) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  return r.json();
+}
+const setSettings = (s) => post("/api/settings", s);
+
+// ---------- tabs ----------
+function setMode(mode) {
+  $("tabDetect").classList.toggle("active", mode === "detect");
+  $("tabCalib").classList.toggle("active", mode === "calibrate");
+  $("detectPanel").classList.toggle("hidden", mode !== "detect");
+  $("calibPanel").classList.toggle("hidden", mode !== "calibrate");
+}
+$("tabDetect").onclick = () => { setMode("detect"); setSettings({ mode: "detect" }); };
+$("tabCalib").onclick = () => { setMode("calibrate"); setSettings({ mode: "calibrate" }); };
+
+// ---------- controls ----------
+function bindRange(id, key, fmt = (v) => v) {
+  const el = $(id), out = $(id + "Val");
+  el.addEventListener("input", () => { out.textContent = fmt(el.value); setSettings({ [key]: parseFloat(el.value) }); });
+  el.addEventListener("pointerdown", () => editing.add(id));
+  el.addEventListener("pointerup", () => setTimeout(() => editing.delete(id), 500));
+}
+bindRange("conf", "conf", (v) => (+v).toFixed(2));
+bindRange("hfov", "hfov", (v) => v);
+bindRange("mountHeight", "mount_height", (v) => (+v).toFixed(2));
+bindRange("mountPitch", "mount_pitch", (v) => (+v).toFixed(1));
+$("mountEnabled").onchange = (e) => setSettings({ mount_enabled: e.target.checked });
+$("model").onchange = (e) => setSettings({ model: e.target.value });
+$("cameraYaml").onchange = (e) => setSettings({ camera_yaml: e.target.value });
+
+for (const id of ["source", "calibCols", "calibRows", "calibSquare", "calibName"]) {
+  $(id).addEventListener("focus", () => editing.add(id));
+  $(id).addEventListener("blur", () => editing.delete(id));
+}
+$("applySource").onclick = () => {
+  const [w, h] = $("resolution").value.split("x").map(Number);
+  setSettings({ source: $("source").value.trim() || "0", width: w, height: h });
+};
+for (const id of ["calibCols", "calibRows", "calibSquare"]) {
+  $(id).onchange = () => setSettings({
+    calib_cols: parseInt($("calibCols").value), calib_rows: parseInt($("calibRows").value),
+    calib_square: parseFloat($("calibSquare").value) / 1000,
+  });
+}
+
+$("snapshot").onclick = async () => {
+  const r = await post("/api/snapshot");
+  $("snapMsg").textContent = r.ok ? "已保存 " + r.saved : r.error;
+};
+async function capture() {
+  const r = await post("/api/calib/capture");
+  if (!r.ok) $("calibError").textContent = r.error; else $("calibError").textContent = "";
+}
+$("calibCapture").onclick = capture;
+document.addEventListener("keydown", (e) => {
+  if (e.code === "Space" && state?.settings.mode === "calibrate" && document.activeElement.tagName !== "INPUT") {
+    e.preventDefault(); capture();
+  }
+});
+$("calibClear").onclick = () => { post("/api/calib/clear"); $("calibResult").innerHTML = ""; };
+$("calibRun").onclick = async () => {
+  $("calibRun").disabled = true; $("calibError").textContent = "计算中…";
+  const r = await post("/api/calib/run", { name: $("calibName").value });
+  $("calibError").textContent = r.ok ? "" : r.error;
+  if (r.ok) renderCalibResult(r.result);
+};
+
+function renderCalibResult(res) {
+  if (!res) return;
+  const rows = [
+    ["RMS 重投影误差", res.rms_px + " px" + (res.rms_px > 1 ? "（偏大，建议重拍）" : "")],
+    ["采集张数", res.views], ["fx / fy", res.fx + " / " + res.fy], ["cx / cy", res.cx + " / " + res.cy],
+    ["水平视角", res.hfov_deg + "°"], ["误差最大的几张", res.worst_views.join(", ")],
+  ];
+  if (res.saved) rows.push(["已保存", res.saved]);
+  $("calibResult").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+}
+
+// ---------- polling ----------
+function fillSelect(el, items, value, emptyLabel) {
+  const opts = (emptyLabel ? [["", emptyLabel]] : []).concat(items.map((i) => [i, i]));
+  const sig = JSON.stringify(opts);
+  if (el.dataset.sig !== sig) {
+    el.innerHTML = opts.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
+    el.dataset.sig = sig;
+  }
+  el.value = value;
+}
+
+function syncControls(s) {
+  const put = (id, v) => { if (!editing.has(id) && document.activeElement !== $(id)) $(id).value = v; };
+  put("conf", s.conf); $("confVal").textContent = s.conf.toFixed(2);
+  put("hfov", s.hfov); $("hfovVal").textContent = s.hfov;
+  put("mountHeight", s.mount_height); $("mountHeightVal").textContent = s.mount_height.toFixed(2);
+  put("mountPitch", s.mount_pitch); $("mountPitchVal").textContent = s.mount_pitch.toFixed(1);
+  $("mountEnabled").checked = s.mount_enabled;
+  put("source", s.source);
+  put("resolution", `${s.width}x${s.height}`);
+  put("calibCols", s.calib_cols); put("calibRows", s.calib_rows);
+  put("calibSquare", +(s.calib_square * 1000).toFixed(2));
+  fillSelect($("model"), state.models, s.model);
+  fillSelect($("cameraYaml"), state.camera_yamls, s.camera_yaml, "（未标定，用假设视角）");
+  setMode(s.mode);
+}
+
+function renderBalls(balls) {
+  const fmt = (v, d = 2) => (v === null || v === undefined ? "—" : v.toFixed(d));
+  $("balls").innerHTML = balls.length
+    ? balls.map((b, i) => `<tr><td>${i + 1}</td><td>${fmt(b.score)}</td><td>${fmt(b.range)}</td><td>${fmt(b.azimuth, 1)}</td>
+        <td>${fmt(b.elevation, 1)}</td><td>${fmt(b.range_size)}</td><td>${fmt(b.range_ground)}</td></tr>`).join("")
+    : `<tr><td colspan="7" class="muted">暂无</td></tr>`;
+}
+
+function drawMap(balls, hfov) {
+  const c = $("map"), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth, h = c.clientHeight;
+  if (c.width !== w * dpr || c.height !== h * dpr) { c.width = w * dpr; c.height = h * dpr; }
+  const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const color = (n) => css.getPropertyValue(n).trim();
+
+  const far = Math.max(2, Math.ceil(Math.max(0, ...balls.map((b) => b.floor ? b.floor[1] : 0)) + 0.5));
+  const scale = (h - 24) / far, ox = w / 2, oy = h - 12;
+  const toPx = (x, z) => [ox + x * scale, oy - z * scale];
+
+  g.strokeStyle = color("--grid"); g.fillStyle = color("--muted"); g.font = "11px system-ui"; g.lineWidth = 1;
+  for (let r = 1; r <= far; r++) {
+    g.beginPath(); g.arc(ox, oy, r * scale, Math.PI, 2 * Math.PI); g.stroke();
+    g.fillText(r + "m", ox + 4, oy - r * scale + 12);
+  }
+  if (hfov) {  // field of view wedge
+    const a = (hfov / 2) * Math.PI / 180;
+    g.strokeStyle = color("--line"); g.setLineDash([4, 4]);
+    for (const s of [-1, 1]) { g.beginPath(); g.moveTo(ox, oy); g.lineTo(...toPx(s * Math.sin(a) * far, Math.cos(a) * far)); g.stroke(); }
+    g.setLineDash([]);
+  }
+  g.fillStyle = color("--accent"); g.beginPath(); g.moveTo(ox, oy - 8); g.lineTo(ox - 6, oy + 4); g.lineTo(ox + 6, oy + 4); g.fill();
+
+  balls.forEach((b, i) => {
+    if (!b.floor) return;
+    const [px, py] = toPx(b.floor[0], b.floor[1]);
+    g.fillStyle = color("--ball"); g.strokeStyle = color("--text");
+    g.beginPath(); g.arc(px, py, 7, 0, 2 * Math.PI); g.fill(); g.stroke();
+    g.fillStyle = color("--text"); g.fillText(`#${i + 1} ${b.range.toFixed(2)}m`, px + 10, py + 4);
+  });
+}
+
+async function poll() {
+  try {
+    state = await (await fetch("/api/state")).json();
+    const s = state.settings;
+    $("fps").textContent = (state.fps ?? 0).toFixed(1) + " FPS";
+    $("infer").textContent = s.mode === "detect" && state.infer_ms ? `推理 ${state.infer_ms.toFixed(0)} ms` : "";
+    $("size").textContent = state.frame_size ? state.frame_size.join(" × ") : "";
+    const cal = state.calibrated;
+    $("calibBadge").textContent = cal ? "已标定" : "未标定";
+    $("calibBadge").classList.toggle("warn", !cal);
+    $("topError").textContent = state.error || "";
+    syncControls(s);
+    renderBalls(state.balls || []);
+    drawMap(state.balls || [], state.hfov_deg);
+
+    const k = state.calib;
+    $("calibViews").textContent = `${k.views}（至少 ${k.min_views}）`;
+    $("boardFound").textContent = k.board_found ? "检测到棋盘格" : "未检测到";
+    $("calibCapture").disabled = !k.board_found;
+    $("calibRun").disabled = k.views < k.min_views;
+    if (k.result && !$("calibResult").innerHTML) renderCalibResult(k.result);
+  } catch (e) {
+    $("topError").textContent = "连接不到服务端";
+  }
+  setTimeout(poll, 200);
+}
+poll();
+</script>
+</body>
+</html>

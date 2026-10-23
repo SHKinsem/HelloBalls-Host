@@ -8,3 +8,7 @@ ros2_ws/install/
 ros2_ws/log/
 __pycache__/
 *.py[cod]
+.venv/
+.pytest_cache/
+calib_imgs/
+captures/
