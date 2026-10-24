@@ -4,3 +4,4 @@ onnxruntime
 pyserial
 pyyaml
 pytest
+pygrabber; sys_platform == "win32"
